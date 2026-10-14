@@ -1,20 +1,23 @@
 ---
 name: kaloboost
 description: >
-  Read a TikTok Shop seller's Kaloboost creator-outreach data via the bundled `boost` CLI
+  Work with a TikTok Shop seller's Kaloboost creator outreach via the bundled `boost` CLI
   (Python, zero install): bound shops, creator lookup by handle (contact email, followers, GMV
-  band), outreach tasks (TikTok DM / target invitations) and per-creator send results,
-  collaboration status, free-sample requests and the videos creators posted for them,
-  affiliate orders with commission, and change events. Use whenever the user asks about their
-  Kaloboost account or TikTok Shop affiliate operations — 达人建联、私信/定向邀约触达、建联任务进度、
-  合作状态、寄样/申样、样品履约、达人发布的视频、联盟订单、佣金 — even if they never say "kaloboost".
+  band), sending TikTok DMs / target invitations to creators and canceling them, outreach
+  progress and per-creator send results, collaboration status, free-sample requests and the
+  videos creators posted, creator content metrics, affiliate orders and attribution with
+  commission, change events and webhook endpoints. Use whenever the user asks about their
+  Kaloboost account or TikTok Shop affiliate operations — 达人建联、发私信/定向邀约、建联任务进度、
+  取消建联、合作状态、寄样/申样、样品履约、达人发布的视频、联盟订单、佣金归因、事件推送 — even if
+  they never say "kaloboost".
 ---
 
 # Kaloboost creator outreach (`boost`)
 
-Kaloboost is the seller-side creator-outreach tool for TikTok Shop. This skill reads the
+Kaloboost is the seller-side creator-outreach tool for TikTok Shop. This skill works on the
 Kaloboost data of the company that owns the API key: its bound shops, outreach, collaborations,
-samples, affiliate orders. It is read-only — it never sends messages or changes anything.
+samples, content, affiliate orders, events. Most commands read. The `[write]` commands send
+messages to real creators or change webhook settings — see "Writes" below before using them.
 
 ## Run
 
@@ -57,20 +60,55 @@ and don't retry the query. Walk the user through these steps and wait:
 |---|---|
 | `boost capabilities` | which features are open for this key; creator regions; rate limits |
 | `boost shops` | bound shops → shop_id for --shop; per-shop capabilities |
-| `boost creator resolve <@handle\|user_id...>` | TikTok creator → creator_oecuid; --region |
+| `boost creator resolve <@handle\|user_id...>` | TikTok creator → creator_oecuid (≤100); --region |
 | `boost creator get <creator_oecuid...>` | profile, contact email/phone, followers, GMV band; --region |
+| `boost creator changes` | creators of a region whose profile or metrics changed; --since |
+| `boost resolve-job create\|get\|results` | async resolve of up to 10,000 handles / user ids |
 | `boost outreach list` | outreach tasks + send progress; --since |
 | `boost outreach get <task_id>` | schedule, invitation products, commission |
 | `boost outreach recipients <task_id>` | per-creator send result and failure reason |
 | `boost outreach templates` | a member's DM / invitation templates; --operator --method |
+| `boost outreach create <creator_oecuid...>` | `[write]` send a DM / target invitation to creators |
+| `boost outreach cancel <task_id>` | `[write]` stop what is not sent yet |
 | `boost collab list` | collaboration records: cooperate_status, outreach_result; --since |
 | `boost collab get <id>` | one collaboration record |
 | `boost sample list` | sample requests: status, product, commission, content counts; --since --status |
 | `boost sample get <id>` | SKUs, fulfillment, status timeline |
 | `boost sample contents <id>` | videos/lives posted for a sample: views, likes, orders |
+| `boost content list` / `get <id>` | creator videos/lives of a shop with metrics; --creator --published-from |
 | `boost order list` | affiliate orders by order time; --from --to (≤90 days) |
+| `boost attribution list` / `get <id>` | affiliate attribution per order line; --creator --order --since |
 | `boost event list` | change events (outreach, collab, sample); --types --since |
+| `boost webhook list` | push endpoints for change events |
+| `boost webhook create\|update\|rotate-secret\|test\|replay` | `[write]` manage push endpoints |
 | `boost config` | show/set key (shared with kalo), default shop, endpoint |
+
+`content`, `attribution` and `creator changes` follow the published API but may still answer
+`CAPABILITY_UNAVAILABLE` (`PLANNED` / `NOT_IMPLEMENTED`) — tell the user the feature isn't live yet.
+
+## Writes
+
+`[write]` commands never act on the first run: without `--yes` they print the exact request
+(`dry_run:`) and send nothing. Show it to the user, get an explicit yes, then rerun with the flags
+the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add `--yes` on your own.
+
+- **Send outreach**: the message text, products and commission come from a template the member
+  made in the Kaloboost console — the API can't take free text. Flow:
+  1. `boost creator resolve @handle --region <shop region>` → creator_oecuid
+  2. `boost outreach templates --shop S --operator <member> --method TIKTOK_DM` → template_id
+     (target invitations: `--method TIKTOK_TARGET_COLLABORATION`, a content template plus an
+     `--type INVITE_PRODUCT` template)
+  3. `boost outreach create <oecuid...> --shop S --operator <member> --template <id>` → dry run
+     (invitations add `--method TIKTOK_TARGET_COLLABORATION --product-template <id> --expire 14d`)
+  4. user confirms → same command + `--external-id <id from the hint> --yes`
+  5. `boost outreach recipients <task_id> --shop S` for per-creator results
+- `--operator` is the Kaloboost member the task runs as (login email or `'+86 13800000000'`); the
+  member must manage the shop. Up to 500 creators per task (`--file` for long lists); `--at`
+  schedules up to 90 days ahead.
+- **Retrying**: if a write ends with "outcome is unknown" (timeout / 503), rerun the identical
+  command with the `--external-id` / `--idempotency-key` the hint shows — it then runs at most
+  once. Never retry an outreach with a new external id: that sends a second task.
+- Sent messages and invitations can't be recalled; `outreach cancel` only stops unsent ones.
 
 ## Conventions
 
@@ -91,6 +129,10 @@ and don't retry the query. Walk the user through these steps and wait:
 - Did the samples pay off: `boost sample contents <id> --shop S` (views, orders per video) and
   `boost order list --shop S --from 30d --all` (affiliate GMV and commission by creator)
 - Look up a creator: `boost creator resolve @handle --region US` → `boost creator get <creator_oecuid>`
+- Many creators (>100): `boost resolve-job create --file handles.txt --region US` → `boost resolve-job get <job_id>`
+  until it finishes → `boost resolve-job results <job_id> --all`
+- Get pushed instead of polling: `boost webhook create --url https://... --shop S` (dry run → `--yes`);
+  store the one-time `secret`. Missed events: `boost webhook replay <endpoint_id> --from 24h`
 
 ## Reading the data right
 
@@ -110,4 +152,6 @@ and don't retry the query. Walk the user through these steps and wait:
   refunds change after the fact — re-pull the window rather than adding up earlier runs. Use
   `--all` for complete orders: one order can span two pages.
 - **Events** reflect the object at detection time and are kept 30 days; several changes can merge
-  into one event, so they are not a step-by-step history.
+  into one event, so they are not a step-by-step history. Webhooks push the same events.
+- **Outreach create** answers `Accepted` before anything is sent; target invitations skip creators
+  already invited, so `total_count` can be below the number you sent.

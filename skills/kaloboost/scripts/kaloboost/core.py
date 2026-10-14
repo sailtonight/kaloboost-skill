@@ -21,7 +21,6 @@ class Flag:
     default: Any = None
     choices: tuple | None = None
     metavar: str | None = None
-    renamed_from: tuple = ()  # old names -> targeted hint instead of generic list
 
     @property
     def dest(self) -> str:
@@ -65,7 +64,6 @@ class Command:
 
 def parse_args(cmd: Command, tokens: list[str]) -> tuple[dict, list[str]]:
     known = {f.name: f for f in cmd.flags}
-    renames = {old: f for f in cmd.flags for old in f.renamed_from}
     opts: dict[str, Any] = {}
     for f in cmd.flags:
         opts[f.dest] = list(f.default) if isinstance(f.default, list) else f.default
@@ -83,11 +81,6 @@ def parse_args(cmd: Command, tokens: list[str]) -> tuple[dict, list[str]]:
             name, eq, inline = t.partition("=")
             f = known.get(name)
             if f is None:
-                if name in renames:
-                    raise UsageError(
-                        f"{name} was renamed; use {renames[name].name} instead",
-                        [f"usage: {cmd.usage()}"],
-                    )
                 valid = ", ".join(sorted(known))
                 raise UsageError(
                     f"unknown flag {name} for `{cmd.path}`",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+import secrets
 import urllib.parse
 
 from .. import api, render
@@ -10,6 +12,8 @@ from ..errors import UsageError
 from . import common
 
 METHODS = ("TIKTOK_DM", "TIKTOK_TARGET_COLLABORATION")
+RECIPIENT_MAX = 500
+PRODUCT_MAX = 100
 OPEN_STATUSES = {"ACCEPTED", "QUEUED", "SCHEDULED", "RUNNING", "PAUSED"}
 
 TASK_FIELDS = (
@@ -117,14 +121,121 @@ def recipients(cfg, opts, args):
     return 0
 
 
-def templates(cfg, opts, args):
-    shop = common.shop(cfg, opts)
+def _operator(opts, why: str) -> str:
     operator = (opts.get("operator") or "").strip()
     if not operator:
         raise UsageError(
             "--operator is required (the Kaloboost member's login email or phone)",
-            ["Templates belong to a member: e.g. --operator member@example.com or --operator '+86 13800000000'"],
+            [f"{why}: e.g. --operator member@example.com or --operator '+86 13800000000'"],
         )
+    return operator
+
+
+def _external_id() -> str:
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"boost-{now}-{secrets.token_hex(4)}"
+
+
+def create(cfg, opts, args):
+    shop = common.shop(cfg, opts)
+    operator = _operator(opts, "The task is sent as this member")
+    method = opts.get("method")
+    template = (opts.get("template") or "").strip()
+    if not template:
+        raise UsageError(
+            "--template is required",
+            [f"List the member's templates: `boost outreach templates --shop {shop} --operator {operator} --method {method}`"],
+        )
+    creators = common.inputs(args, opts, "creator_oecuid", RECIPIENT_MAX)
+    if any(c.startswith("@") for c in creators):
+        raise UsageError(
+            "recipients are creator_oecuid values, not handles",
+            ["Resolve handles first: `boost creator resolve @handle --region <shop region>`"],
+        )
+    products = common.ids([opts["products"]], "product id", PRODUCT_MAX) if opts.get("products") else None
+    invite = method == "TIKTOK_TARGET_COLLABORATION"
+    if not invite and (products or opts.get("product_template") or opts.get("expire")):
+        raise UsageError("--product-template, --expire and --products only apply to --method TIKTOK_TARGET_COLLABORATION")
+    body: dict = {
+        "external_task_id": (opts.get("external_id") or "").strip() or _external_id(),
+        "shop_id": shop,
+        "operator_account": operator,
+        "outreach_method": method,
+        "template_id": template,
+    }
+    if invite:
+        if not opts.get("product_template") or not opts.get("expire"):
+            raise UsageError(
+                "target invitations need --product-template and --expire",
+                [f"Product templates: `boost outreach templates --shop {shop} --operator {operator} "
+                 "--method TIKTOK_TARGET_COLLABORATION --type INVITE_PRODUCT`"],
+            )
+        body["invitation"] = {
+            "product_template_id": opts["product_template"].strip(),
+            "expire_at": common.parse_future(opts["expire"], "--expire"),
+        }
+    at = common.parse_future(opts.get("at"), "--at")
+    if at:
+        body["schedule"] = {"not_before": at}
+    recipients = []
+    for c in creators:
+        r: dict = {"creator_oecuid": c}
+        if products:
+            r["channel_product_ids"] = products
+        recipients.append(r)
+    body["recipients"] = recipients
+
+    ext = body["external_task_id"]
+    env = common.send(
+        cfg, opts, "POST", "/outreach-tasks", body=body, key=ext, retry_hint=f"--external-id {ext}",
+        confirm_flags=f"--external-id {ext} --yes",
+    )
+    if env is None:
+        return 0
+    data = env.get("data") or {}
+    if opts.get("json"):
+        common.dump_json(data)
+        return 0
+    render.emit_detail("outreach_task", data)
+    task = data.get("outreach_task_id")
+    hints = [
+        "Accepted, not sent yet — Kaloboost sends in the background",
+        f"Progress: `boost outreach get {task} --shop {shop}`; per creator: `boost outreach recipients {task} --shop {shop}`",
+        f"Stop what is not sent yet: `boost outreach cancel {task} --shop {shop} --operator {operator}`",
+    ]
+    total = data.get("total_count")
+    if invite and isinstance(total, int) and total < len(creators):
+        hints.insert(1, f"{len(creators) - total} creator(s) dropped: already invited (duplicate invitations are skipped)")
+    render.emit_help(hints)
+    return 0
+
+
+def cancel(cfg, opts, args):
+    shop = common.shop(cfg, opts)
+    operator = _operator(opts, "The task is canceled as this member")
+    task = args[0]
+    env = common.send(
+        cfg, opts, "POST", f"/outreach-tasks/{_q(task)}:cancel",
+        params={"shop_id": shop, "operator_account": operator},
+    )
+    if env is None:
+        return 0
+    data = env.get("data") or {}
+    if opts.get("json"):
+        common.dump_json(data)
+        return 0
+    render.emit_detail("outreach_task", data)
+    render.emit_help([
+        "Only creators not sent yet are stopped — sent messages and invitations can't be recalled",
+        "Finished tasks (COMPLETED/PARTIALLY_COMPLETED/FAILED) are returned unchanged",
+        f"The status may lag a moment; confirm with `boost outreach get {task} --shop {shop}`",
+    ])
+    return 0
+
+
+def templates(cfg, opts, args):
+    shop = common.shop(cfg, opts)
+    operator = _operator(opts, "Templates belong to a member")
     method = opts.get("method")
     ttype = opts.get("type")
     if ttype and method == "TIKTOK_DM":
@@ -204,5 +315,46 @@ COMMANDS = [
             *common.page_flags(default_limit=50),
         ],
         examples=["boost outreach templates --shop <SHOP_ID> --operator member@example.com --method TIKTOK_DM"],
+    ),
+    Command(
+        path="outreach create",
+        summary="Send a TikTok DM or target invitation to creators (prints the request; --yes sends)",
+        handler=create,
+        flags=[
+            common.shop_flag(),
+            Flag("--operator", "member account the task runs as: login email or '+CC NUMBER'", metavar="ACCOUNT"),
+            Flag("--method", "channel", default="TIKTOK_DM", choices=METHODS, metavar="|".join(METHODS)),
+            Flag("--template", "DM template / invitation content template id (from `outreach templates`)", metavar="TEMPLATE_ID"),
+            Flag("--product-template", "invitation product template id (target invitations)", metavar="TEMPLATE_ID"),
+            Flag("--expire", "invitation expiry: 14d (from now) | yyyy-MM-dd | ISO (target invitations)", metavar="WHEN"),
+            Flag("--products", "comma-separated TikTok product ids, a subset of the product template (default: all)", metavar="IDS"),
+            Flag("--at", "start later: 2h (from now) | yyyy-MM-dd | ISO, at most 90 days ahead (default: now)", metavar="WHEN"),
+            Flag("--external-id", "your id for this task; rerun with the same id to retry safely (default: generated)", metavar="ID"),
+            common.file_flag("creator_oecuids"),
+            common.yes_flag(),
+        ],
+        positional="creator_oecuid",
+        pos_min=0,
+        pos_max=None,
+        examples=[
+            "boost outreach create <OECUID1> <OECUID2> --shop <SHOP_ID> --operator member@example.com --template <TEMPLATE_ID>",
+            "boost outreach create --file creators.txt --shop <SHOP_ID> --operator member@example.com "
+            "--method TIKTOK_TARGET_COLLABORATION --template <CONTENT_ID> --product-template <PRODUCT_ID> --expire 14d --yes",
+        ],
+    ),
+    Command(
+        path="outreach cancel",
+        summary="Stop the not-yet-sent part of an outreach task (prints the request; --yes sends)",
+        handler=cancel,
+        flags=[
+            common.shop_flag(),
+            Flag("--operator", "member account the cancel runs as: login email or '+CC NUMBER'", metavar="ACCOUNT"),
+            common.key_flag(),
+            common.yes_flag(),
+        ],
+        positional="outreach_task_id",
+        pos_min=1,
+        pos_max=1,
+        examples=["boost outreach cancel <TASK_ID> --shop <SHOP_ID> --operator member@example.com --yes"],
     ),
 ]

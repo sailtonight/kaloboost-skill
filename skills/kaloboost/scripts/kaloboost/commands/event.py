@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from .. import render
 from ..core import Command, Flag
-from ..errors import UsageError
 from . import common
-
-TYPES = ("outreach.task.updated", "outreach.recipient.updated", "collaboration.updated", "sample.updated")
 
 
 def _state(e: dict):
@@ -21,13 +18,7 @@ def _state(e: dict):
 def events(cfg, opts, args):
     cursor = opts.get("cursor")
     shop = None if cursor and not opts.get("shop") else common.shop(cfg, opts)
-    types = None
-    if opts.get("types"):
-        types = common.ids([opts["types"]], "event type")
-        bad = [t for t in types if t not in TYPES]
-        if bad:
-            raise UsageError(f"unsupported event type(s): {', '.join(bad)}", [f"v1 types: {', '.join(TYPES)}"])
-        types = ",".join(types)
+    types = common.joined(common.event_types(opts.get("types")), ",")
     since = common.parse_when(opts.get("since"))
     params = {"shop_id": shop, "types": types, "updated_from": since}
     if cursor:
@@ -70,7 +61,7 @@ COMMANDS = [
         handler=events,
         flags=[
             common.shop_flag(),
-            Flag("--types", "comma-separated: " + ",".join(TYPES), metavar="TYPES"),
+            Flag("--types", "comma-separated: " + ",".join(common.EVENT_TYPES), metavar="TYPES"),
             common.since_flag("that occurred"),
             *common.page_flags(default_limit=50),
         ],

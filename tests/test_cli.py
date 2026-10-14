@@ -245,7 +245,7 @@ def test_invalid_key(capsys, env):
     assert code == 1
     assert out.startswith("error: INVALID_API_KEY")
     assert "request_id req_test" in out
-    assert "paid plan" in out
+    assert "boost config set --key" in out
     assert len(env.requests) == 1  # auth failures are not retried
 
 
@@ -311,3 +311,197 @@ def test_gateway_envelope_success_and_failure(capsys, env):
     code, out = run(capsys, "shops")
     assert code == 1
     assert "invalid secret-key" in out
+
+
+def test_account_not_eligible_follows_first_failing_item(capsys, env):
+    details = [
+        {"field": "kaloboost_account", "reason": "OK", "requirement": "..."},
+        {"field": "enterprise_subscription", "reason": "REQUIRED", "action": "Upgrade to Enterprise.",
+         "url": "https://boost.kalowave.com", "requirement": "..."},
+        {"field": "openapi_access", "reason": "NOT_CHECKED", "requirement": "..."},
+    ]
+    env.responses["/shops"] = err(403, "ACCOUNT_NOT_ELIGIBLE", details=details)
+    code, out = run(capsys, "shops")
+    assert code == 1
+    assert out.startswith("error: ACCOUNT_NOT_ELIGIBLE: boom")
+    assert "Blocked at enterprise_subscription: REQUIRED" in out
+    assert "Upgrade to Enterprise." in out and "https://boost.kalowave.com" in out
+
+
+# --- writes ----------------------------------------------------------------------
+
+DM = ("outreach", "create", "111", "222", "--shop", "s", "--operator", "a@b.com", "--template", "T1")
+
+
+def test_outreach_create_without_yes_sends_nothing(capsys, env):
+    code, out = run(capsys, *DM)
+    assert code == 0
+    assert env.requests == []
+    assert out.startswith("dry_run:")
+    assert "recipients[2]{creator_oecuid}" in out
+    ext = next(ln.split(": ")[1] for ln in out.splitlines() if "external_task_id" in ln)
+    assert f"--external-id {ext} --yes" in out
+
+
+def test_outreach_create_sends_with_external_id_as_key(capsys, env):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t9", "status": "QUEUED", "total_count": 2}})
+    code, out = run(capsys, *DM, "--external-id", "ext-1", "--yes")
+    assert code == 0
+    method, path, _, headers, body = env.requests[0]
+    assert (method, path) == ("POST", "/outreach-tasks")
+    assert headers["idempotency-key"] == "ext-1"
+    assert headers["content-type"].startswith("application/json")
+    assert body == {
+        "external_task_id": "ext-1", "shop_id": "s", "operator_account": "a@b.com",
+        "outreach_method": "TIKTOK_DM", "template_id": "T1",
+        "recipients": [{"creator_oecuid": "111"}, {"creator_oecuid": "222"}],
+    }
+    assert "boost outreach recipients t9 --shop s" in out
+
+
+def test_outreach_create_invitation_body(capsys, env, tmp_path):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t1", "total_count": 1}})
+    f = tmp_path / "c.txt"
+    f.write_text("# creators\n111\n\n222\n")
+    code, out = run(
+        capsys, "outreach", "create", "--file", str(f), "--shop", "s", "--operator", "a@b.com",
+        "--method", "TIKTOK_TARGET_COLLABORATION", "--template", "C1", "--product-template", "P1",
+        "--expire", "2026-12-31T00:00:00Z", "--products", "p1,p2", "--at", "2026-11-20", "--yes",
+    )
+    assert code == 0
+    body = env.requests[0][4]
+    assert body["invitation"] == {"product_template_id": "P1", "expire_at": "2026-12-31T00:00:00Z"}
+    assert body["schedule"] == {"not_before": "2026-11-20T00:00:00Z"}
+    assert [r["creator_oecuid"] for r in body["recipients"]] == ["111", "222"]
+    assert all(r["channel_product_ids"] == ["p1", "p2"] for r in body["recipients"])
+    assert "1 creator(s) dropped: already invited" in out
+
+
+def test_outreach_create_validates_locally(capsys, env):
+    code, out = run(capsys, *DM, "--expire", "7d")
+    assert code == 2 and "only apply to --method TIKTOK_TARGET_COLLABORATION" in out
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--operator", "a@b.com",
+                    "--method", "TIKTOK_TARGET_COLLABORATION", "--template", "C1")
+    assert code == 2 and "--product-template and --expire" in out
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--template", "T")
+    assert code == 2 and "--operator is required" in out
+    assert env.requests == []
+
+
+def test_outreach_create_503_keeps_key_and_hints_retry(capsys, env):
+    env.responses["/outreach-tasks"] = err(503, "UPSTREAM_UNAVAILABLE")
+    code, out = run(capsys, *DM, "--external-id", "ext-7", "--yes")
+    assert code == 1
+    assert len(env.requests) == 3
+    assert {r[3]["idempotency-key"] for r in env.requests} == {"ext-7"}
+    assert "--external-id ext-7" in out
+
+
+def test_outreach_create_conflict_hints(capsys, env):
+    env.responses["/outreach-tasks"] = err(409, "IDEMPOTENCY_CONFLICT", "external_task_id", "EXTERNAL_ID_IN_USE")
+    code, out = run(capsys, *DM, "--yes")
+    assert code == 1
+    assert "already created a task" in out
+
+
+def test_outreach_cancel(capsys, env):
+    env.responses["/outreach-tasks/t1:cancel"] = (202, {"data": {"outreach_task_id": "t1", "status": "CANCELED"}})
+    code, out = run(capsys, "outreach", "cancel", "t1", "--shop", "s", "--operator", "+86 138",
+                    "--idempotency-key", "k1", "--yes")
+    assert code == 0
+    method, path, query, headers, body = env.requests[0]
+    assert (method, path, body) == ("POST", "/outreach-tasks/t1:cancel", None)
+    assert query == {"shop_id": "s", "operator_account": "+86 138"}
+    assert headers["idempotency-key"] == "k1"
+    assert "CANCELED" in out
+
+
+def test_webhook_create_shows_secret_once(capsys, env, monkeypatch):
+    monkeypatch.setenv("KALOBOOST_SHOP", "s_cfg")
+    env.responses["/webhook-endpoints"] = {"data": {"endpoint_id": "whe_1", "status": "ACTIVE", "secret": "whsec_x"}}
+    code, out = run(capsys, "webhook", "create", "--url", "https://h.example.com/k", "--yes")
+    assert code == 0
+    body = env.requests[0][4]
+    assert body["shop_ids"] == ["s_cfg"]
+    assert body["event_types"] == list(common.EVENT_TYPES)
+    assert "whsec_x" in out and "shown only this once" in out
+
+
+def test_webhook_update_is_patch(capsys, env):
+    env.responses["/webhook-endpoints/whe_1"] = {"data": {"endpoint_id": "whe_1", "status": "ACTIVE"}}
+    code, out = run(capsys, "webhook", "update", "whe_1", "--status", "ACTIVE", "--shop", "a", "--shop", "b,c", "--yes")
+    assert code == 0
+    method, path, _, _, body = env.requests[0]
+    assert (method, path) == ("PATCH", "/webhook-endpoints/whe_1")
+    assert body == {"shop_ids": ["a", "b", "c"], "status": "ACTIVE"}
+    assert "webhook replay whe_1" in out
+
+
+def test_webhook_replay_and_list(capsys, env):
+    env.responses["/webhook-endpoints/whe_1:replay"] = (202, {"data": {"replay_id": "whr_1"}})
+    code, out = run(capsys, "webhook", "replay", "whe_1", "--from", "2026-10-01", "--to", "2026-10-02",
+                    "--types", "sample.updated", "--yes")
+    assert code == 0
+    assert env.requests[0][4] == {"occurred_from": "2026-10-01T00:00:00Z", "occurred_to": "2026-10-02T00:00:00Z",
+                                  "event_types": ["sample.updated"]}
+    env.responses["/webhook-endpoints"] = {"data": [{"endpoint_id": "whe_1", "status": "PAUSED", "paused_reason": "AUTO_4XX",
+                                                     "event_types": ["sample.updated"], "shop_ids": ["s"]}]}
+    code, out = run(capsys, "webhook")
+    assert code == 0
+    assert "whe_1,PAUSED,AUTO_4XX" in out
+    assert "--status ACTIVE" in out
+
+
+# --- other new reads -------------------------------------------------------------
+
+def test_resolve_job_flow(capsys, env):
+    env.responses["/identity-resolution-jobs"] = {"data": {"job_id": "irj_1", "status": "QUEUED", "total_count": 2}}
+    code, out = run(capsys, "resolve-job", "create", "@a", "7491234567890123456", "--region", "GB")
+    assert code == 0
+    _, _, _, headers, body = env.requests[0]
+    assert headers["idempotency-key"]
+    assert body["items"][1] == {"external_request_id": "7491234567890123456", "shop_region": "GB",
+                                "creator_user_id": "7491234567890123456"}
+    assert "boost resolve-job get irj_1" in out
+    env.responses["/identity-resolution-jobs/irj_1/results"] = page(
+        [{"external_request_id": "@a", "status": "MATCHED", "creator": {"creator_oecuid": "c1"}}]
+    )
+    code, out = run(capsys, "resolve-job", "results", "irj_1")
+    assert code == 0
+    assert "MATCHED 1" in out and "c1" in out
+
+
+def test_creator_resolve_over_100_points_to_job(capsys, env):
+    code, out = run(capsys, "creator", "resolve", *[f"@c{i}" for i in range(101)])
+    assert code == 2
+    assert "resolve-job create" in out
+
+
+def test_content_list_filters_and_more_hint(capsys, env):
+    env.responses["/creator-content"] = page(
+        [{"content_id": "cnt_1", "content_type": "VIDEO", "metrics": {"watch_cnt": 10, "direct_gmv_amount": "1.5",
+                                                                     "currency_code": "USD"}}], cursor="C1")
+    code, out = run(capsys, "content", "--shop", "s", "--creator", "cr", "--published-from", "2026-09-01")
+    assert code == 0
+    q = env.requests[0][2]
+    assert q["creator_oecuid"] == "cr" and q["published_time_from"] == "2026-09-01T00:00:00Z"
+    assert "1.5 USD" in out
+    assert "boost content list --shop s --creator cr --published-from 2026-09-01T00:00:00Z --cursor C1" in out
+
+
+def test_attribution_not_implemented(capsys, env):
+    env.responses["/affiliate-attributions"] = err(503, "CAPABILITY_UNAVAILABLE", "affiliate_attribution", "NOT_IMPLEMENTED")
+    code, out = run(capsys, "attribution", "list", "--shop", "s")
+    assert code == 1
+    assert len(env.requests) == 1
+    assert "not live on the server yet" in out
+
+
+def test_creator_changes(capsys, env):
+    env.responses["/creator-changes"] = page([{"creator_oecuid": "c1", "resource_version": 3,
+                                               "change_mask": ["identity.handle", "metrics.follower_count"],
+                                               "creator": {"identity": {"handle": "new"}}}])
+    code, out = run(capsys, "creator", "changes", "--region", "us", "--since", "2026-10-01")
+    assert code == 0
+    assert env.requests[0][2]["shop_region"] == "US"
+    assert "identity.handle metrics.follower_count" in out

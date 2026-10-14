@@ -21,7 +21,9 @@ class MockBoost(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        self._respond(json.loads(self.rfile.read(length) or b"{}"))
+        self._respond(json.loads(self.rfile.read(length)) if length else None)
+
+    do_PATCH = do_POST
 
     def do_GET(self):
         self._respond(None)
@@ -75,8 +77,9 @@ def env(monkeypatch, mock_server, tmp_path):
     return mock_server
 
 
-def err(status, code, field=None, reason=None, message="boom"):
-    details = [{"field": field, "reason": reason}] if field else []
+def err(status, code, field=None, reason=None, message="boom", details=None):
+    if details is None:
+        details = [{"field": field, "reason": reason}] if field else []
     return (status, {"error": {"code": code, "message": message, "details": details}, "request_id": "req_test"})
 
 

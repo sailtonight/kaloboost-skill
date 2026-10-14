@@ -14,27 +14,37 @@ from . import __version__, onboarding, toon
 from .config import DEFAULT_BASE_URL, Config
 
 DESCRIPTION = (
-    "Kaloboost creator-outreach data for TikTok Shop sellers — bound shops, creator lookup, "
-    "outreach tasks, collaborations, free samples, affiliate orders, change events"
+    "Kaloboost creator outreach for TikTok Shop sellers — shops, creator lookup, outreach tasks "
+    "(read, send, cancel), collaborations, samples, content, affiliate orders, change events, webhooks"
 )
 
 # (command, what) — the `what` column is deliberately terse; details live in --help
 COMMAND_TABLE = [
     ("boost capabilities", "which features are open for this key; creator regions; rate limits"),
     ("boost shops", "bound shops → shop_id for --shop; per-shop capabilities"),
-    ("boost creator resolve <@handle|user_id...>", "TikTok creator → creator_oecuid; --region"),
+    ("boost creator resolve <@handle|user_id...>", "TikTok creator → creator_oecuid (≤100); --region"),
     ("boost creator get <creator_oecuid...>", "profile, contact email/phone, followers, GMV band; --region"),
+    ("boost creator changes", "creators of a region whose profile or metrics changed; --since"),
+    ("boost resolve-job create|get|results", "async resolve of up to 10,000 handles / user ids"),
     ("boost outreach list", "outreach tasks + send progress; --since"),
     ("boost outreach get <task_id>", "schedule, invitation products, commission"),
     ("boost outreach recipients <task_id>", "per-creator send result and failure reason"),
     ("boost outreach templates", "a member's DM / invitation templates; --operator --method"),
+    ("boost outreach create <creator_oecuid...>", "send a DM / target invitation [write, --yes]"),
+    ("boost outreach cancel <task_id>", "stop what is not sent yet [write, --yes]"),
     ("boost collab list", "collaboration records: cooperate_status, outreach_result; --since"),
     ("boost collab get <id>", "one collaboration record"),
     ("boost sample list", "sample requests: status, product, commission, content counts; --since --status"),
     ("boost sample get <id>", "SKUs, fulfillment, status timeline"),
     ("boost sample contents <id>", "videos/lives posted for a sample: views, likes, orders"),
+    ("boost content list", "creator videos/lives of a shop with metrics; --creator --published-from"),
+    ("boost content get <id>", "one video/live: sample & collaboration links, metrics"),
     ("boost order list", "affiliate orders by order time; --from --to (≤90 days)"),
+    ("boost attribution list", "affiliate attribution per order line; --creator --order --since"),
+    ("boost attribution get <id>", "one attribution record: amounts, settlement"),
     ("boost event list", "change events (outreach, collab, sample); --types --since"),
+    ("boost webhook list", "push endpoints for change events"),
+    ("boost webhook create|update|rotate-secret|test|replay", "manage push endpoints [write, --yes]"),
     ("boost config", "show/set key (shared with kalo), default shop, endpoint"),
 ]
 
@@ -43,6 +53,7 @@ CONVENTIONS = [
     "Lists take --limit (1-100) --cursor --all; follow the `More:` hint to page, it repeats the needed flags",
     "--since/--from/--to take 30m | 24h | 7d | yyyy-MM-dd | ISO 8601 UTC",
     "Creator commands are per market: --region US (default) GB ID TH VN PH MY SG JP MX BR DE ES FR IT NL IE PL",
+    "[write] commands only print the request; add --yes to send it after the user confirms",
     "Run `boost <command> --help` for per-command flags and examples",
 ]
 
