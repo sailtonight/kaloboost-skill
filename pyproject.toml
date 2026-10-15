@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaloboost-mcp"
+dynamic = ["version"]
+description = "Kaloboost TikTok Shop creator outreach CLI and local MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.3,<3", "pydantic>=2.11,<3", "anyio>=4.9,<5"]
+
+[project.scripts]
+boost = "kaloboost.cli:entry"
+kaloboost-mcp = "kaloboost.mcp_server:entry"
+
+[tool.setuptools.packages.find]
+where = ["skills/kaloboost/scripts"]
+include = ["kaloboost*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "kaloboost.__version__"}

@@ -74,10 +74,91 @@ Output is token-efficient TOON; add `--json` for raw JSON. Lists are cursor-page
 
 Exit codes: `0` success, `1` error, `2` usage error.
 
+## Local MCP server
+
+The repository also includes a stdio MCP server exposing every command except `config`
+as a tool, e.g. `shops`, `creator_resolve`, `outreach_list`, `sample_list`,
+`outreach_create` and `webhook_rotate_secret`. It shares the CLI's API client,
+configuration and validation. The CLI remains usable with Python's standard library only;
+MCP dependencies are installed separately through the `mcp` extra.
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then add this
+configuration to your MCP client. This installs directly from GitHub; no PyPI release or
+manual clone is required:
+
+```json
+{
+  "mcpServers": {
+    "kaloboost": {
+      "command": "uvx",
+      "args": [
+        "--python", ">=3.11",
+        "--from",
+        "kaloboost-mcp[mcp] @ git+https://github.com/sailtonight/kaloboost-skill",
+        "kaloboost-mcp"
+      ],
+      "env": {
+        "KALODATA_API_KEY": "YOUR_API_KEY",
+        "KALOBOOST_SHOP": "OPTIONAL_DEFAULT_SHOP_ID"
+      }
+    }
+  }
+}
+```
+
+For a local checkout, use this configuration (replace the absolute path):
+
+```json
+{
+  "mcpServers": {
+    "kaloboost": {
+      "command": "uv",
+      "args": [
+        "run", "--directory", "/absolute/path/to/kaloboost-skill",
+        "--extra", "mcp", "kaloboost-mcp"
+      ],
+      "env": {
+        "KALODATA_API_KEY": "YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
+The client launches and manages the server process. `--python ">=3.11"` lets uv fetch a
+suitable Python when the system one is older. If your desktop client cannot find
+`uv`/`uvx`, use the executable's absolute path. Existing `boost config set ...` / `kalo`
+configuration also works; environment variables take precedence.
+
+Tool names are the command path with `_`, e.g. `resolve-job create` → `resolve_job_create`.
+Arguments use flag names without `--` and with `_` for `-`, e.g.
+`outreach_list({"shop":"<SHOP_ID>","since":"7d","limit":50})`. Commands that take several
+ids use a string array, e.g. `creator_get({"ids":["<CREATOR_OECUID>"]})`; single-id
+commands take a named argument, e.g. `outreach_get({"outreach_task_id":"<ID>"})`.
+Tools return raw JSON under `data`, matching the CLI's `--json` mode; `json` and `file`
+(local file input) are not exposed. Lists return `next_cursor`; pass it back as `cursor`,
+or set `all: true`.
+
+Write tools (`outreach_create`, `outreach_cancel`, `webhook_create/update/rotate_secret/test/replay`)
+send nothing without `yes: true`: they return a `dry_run` preview plus a `next` hint naming
+the `idempotency_key` (or `external_id` for `outreach_create`) to pass along when the user
+confirms, so a retried call runs at most once.
+
+To run the server manually from a checkout:
+
+```sh
+uv run --extra mcp kaloboost-mcp
+```
+
+This starts the protocol on stdin/stdout and waits for a client. It does not start an
+HTTP server.
+
 ## Development
 
 ```sh
 uv run --with pytest pytest -q     # tests run against a local mock server, no credentials needed
+uv run --extra mcp --with pytest pytest -q  # includes MCP protocol and subprocess tests
+uv build                          # build an installable wheel and source archive
 ```
 
 ## License

@@ -2,7 +2,32 @@
 
 from __future__ import annotations
 
+import json
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from . import toon
+
+_results: ContextVar[list | None] = ContextVar("kaloboost_results", default=None)
+
+
+@contextmanager
+def collect_results():
+    """Collect structured results without writing to the CLI/MCP stdout."""
+    results = []
+    token = _results.set(results)
+    try:
+        yield results
+    finally:
+        _results.reset(token)
+
+
+def emit_json(data) -> None:
+    results = _results.get()
+    if results is not None:
+        results.append(data)
+    else:
+        out(json.dumps(data, ensure_ascii=False))
 
 
 def out(text: str = "") -> None:

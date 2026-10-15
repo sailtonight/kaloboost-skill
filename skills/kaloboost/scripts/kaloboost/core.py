@@ -21,6 +21,8 @@ class Flag:
     default: Any = None
     choices: tuple | None = None
     metavar: str | None = None
+    min: int | None = None  # int bounds: exposed as MCP schema minimum/maximum
+    max: int | None = None
 
     @property
     def dest(self) -> str:

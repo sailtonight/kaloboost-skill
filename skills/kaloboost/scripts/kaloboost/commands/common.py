@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import shlex
 import uuid
@@ -37,7 +36,7 @@ def region_flag() -> Flag:
 
 def page_flags(default_limit: int = 20, max_pages: int = ALL_MAX_PAGES) -> list[Flag]:
     return [
-        Flag("--limit", f"rows per page (1-{PAGE_MAX})", kind="int", default=default_limit),
+        Flag("--limit", f"rows per page (1-{PAGE_MAX})", kind="int", default=default_limit, min=1, max=PAGE_MAX),
         Flag("--cursor", "continue from a previous page's next_cursor", metavar="CURSOR"),
         Flag("--all", f"follow next_cursor automatically (up to {max_pages} pages)", kind="flag", default=False),
     ]
@@ -304,7 +303,7 @@ def page_hints(
 # --- output ------------------------------------------------------------------
 
 def dump_json(value) -> None:
-    render.out(json.dumps(value, ensure_ascii=False))
+    render.emit_json(value)
 
 
 def joined(values, sep: str = "|"):
