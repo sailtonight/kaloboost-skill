@@ -13,7 +13,7 @@ from . import common
 RESOLVE_MAX = 100
 JOB_MAX = 10000
 BATCH_MAX = 100
-RESOLVE_FIELDS = ("input", "status", "match_basis", "creator_oecuid", "handle", "creator_user_id", "gmv_range")
+RESOLVE_FIELDS = ("input", "status", "match_basis", "creator_oecuid", "handle", "gmv_range")
 _USER_ID = re.compile(r"^\d{6,}$")
 
 
@@ -40,7 +40,6 @@ def resolve_rows(results: list[dict]) -> list[dict]:
                 "match_basis": r.get("match_basis"),
                 "creator_oecuid": c.get("creator_oecuid"),
                 "handle": c.get("handle"),
-                "creator_user_id": c.get("creator_user_id"),
                 "gmv_range": c.get("gmv_range"),
             }
         )

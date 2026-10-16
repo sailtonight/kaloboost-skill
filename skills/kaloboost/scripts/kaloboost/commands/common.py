@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import re
 import shlex
+import time
 import uuid
 from pathlib import Path
 
@@ -181,13 +182,18 @@ def send(
     retry_hint: str | None = None,
     confirm: bool = True,
     confirm_flags: str = "--yes",
+    idempotent: bool = True,
 ) -> dict | None:
     """Run a write call with an Idempotency-Key; without --yes print it instead (returns None).
 
     The key is reused across the client's automatic retries, and surfaced when
     the outcome is unknown (network / 5xx / in-progress) so the caller can retry
-    the same operation without running it twice.
+    the same operation without running it twice. `idempotent=False` is for
+    endpoints without keys (template creation): no key, no automatic retry.
     """
+    if not idempotent:
+        return _send_once(cfg, opts, method, path, query={k: v for k, v in (params or {}).items() if v is not None},
+                          body=body, confirm=confirm, confirm_flags=confirm_flags)
     key = key or opts.get("idempotency_key") or str(uuid.uuid4())
     retry_hint = retry_hint or f"--idempotency-key {key}"
     query = {k: v for k, v in (params or {}).items() if v is not None}
@@ -214,11 +220,29 @@ def send(
         raise
 
 
+def _send_once(cfg, opts, method, path, *, query, body, confirm, confirm_flags) -> dict | None:
+    if confirm and not opts.get("yes"):
+        preview: dict = {"method": method, "path": path}
+        if query:
+            preview["query"] = query
+        if body is not None:
+            preview["body"] = body
+        if opts.get("json"):
+            dump_json({"dry_run": preview})
+        else:
+            render.emit_detail("dry_run", preview)
+            render.emit_help([
+                f"Nothing was sent. Show this to the user; once they confirm, run the same command with {confirm_flags}",
+            ])
+        return None
+    return api.request(cfg, method, path, params=query, body=body, retry=False)
+
+
 # --- paging ------------------------------------------------------------------
 
 def fetch_pages(
     cfg, path: str, params: dict, opts, *,
-    stop_on_empty: bool = False, stream: bool = False, max_pages: int = ALL_MAX_PAGES,
+    stop_on_empty: bool = False, stream: bool = False, max_pages: int = ALL_MAX_PAGES, pace: float = 0.0,
 ):
     """One page, or every page with --all. Returns (rows, next_cursor, pages_read).
 
@@ -227,6 +251,7 @@ def fetch_pages(
     still carrying a cursor (/collaborations hits a server-side time budget), so
     without that flag only a null cursor ends the loop. `stream` is for /events,
     which always hands back a cursor to poll with later: `has_more` ends the loop.
+    `pace` waits that many seconds between pages, for endpoints limited to 1/s.
     """
     params = dict(params, limit=limit(opts))
     cursor = opts.get("cursor")
@@ -246,6 +271,8 @@ def fetch_pages(
             break
         if pages >= max_pages:
             break
+        if pace:
+            time.sleep(pace)
     if stop_on_empty and not rows:
         cursor = None  # caught up; nothing new to continue from
     return rows, cursor, pages

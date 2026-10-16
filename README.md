@@ -4,7 +4,7 @@ Agent skill for [Kaloboost](https://www.kaloboost.com) — a TikTok Shop seller'
 
 The skill bundles a zero-dependency CLI (`boost`, Python 3.11+ stdlib only). Installing the skill is all it takes: the agent runs the CLI straight from the skill directory. It covers every endpoint of the Kaloboost OpenAPI v1.
 
-Write commands (`outreach create/cancel`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
+Write commands (`outreach create/create-template/cancel`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
 
 ## Install
 
@@ -48,7 +48,7 @@ boost outreach list --shop <SHOP_ID> --since 7d
 boost sample list --shop <SHOP_ID> --all --status CONTENT_PENDING
 boost creator resolve @demo_creator --region US
 boost order list --shop <SHOP_ID> --from 30d --all
-boost outreach create <CREATOR_OECUID> --shop <SHOP_ID> --operator member@example.com --template <TEMPLATE_ID>   # dry run; add --yes to send
+boost outreach create <CREATOR_OECUID> --shop <SHOP_ID> --text 'Hi ${handle}! Free sample?'   # dry run; add --yes to send
 ```
 
 Output is token-efficient TOON; add `--json` for raw JSON. Lists are cursor-paged: follow the `More:` hint (it repeats the flags the cursor is bound to) or add `--all`.
@@ -62,7 +62,9 @@ Output is token-efficient TOON; add `--json` for raw JSON. Lists are cursor-page
 | `boost creator resolve` / `get` / `changes` | Match creators, read profile and contact, region change feed |
 | `boost resolve-job create` / `get` / `results` | Async resolve of up to 10,000 creators |
 | `boost outreach list` / `get` / `recipients` / `templates` | Outreach tasks, progress, per-creator results, templates |
-| `boost outreach create` / `cancel` | Send a DM / target invitation, stop unsent parts (`--yes`) |
+| `boost outreach products` / `upload-image` | Products usable in DMs / invitations, image upload for DM images |
+| `boost outreach create` / `cancel` | Send a DM / target invitation (content inline or from a template), stop unsent parts (`--yes`) |
+| `boost outreach create-template` | Save a DM / invitation template in Kaloboost (`--yes`) |
 | `boost collab list` / `get` | Collaboration records |
 | `boost sample list` / `get` / `contents` | Sample requests, fulfillment, posted videos/lives |
 | `boost content list` / `get` | Creator videos/lives of a shop with metrics |
@@ -139,10 +141,12 @@ Tools return raw JSON under `data`, matching the CLI's `--json` mode; `json` and
 (local file input) are not exposed. Lists return `next_cursor`; pass it back as `cursor`,
 or set `all: true`.
 
-Write tools (`outreach_create`, `outreach_cancel`, `webhook_create/update/rotate_secret/test/replay`)
-send nothing without `yes: true`: they return a `dry_run` preview plus a `next` hint naming
-the `idempotency_key` (or `external_id` for `outreach_create`) to pass along when the user
-confirms, so a retried call runs at most once.
+Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`,
+`webhook_create/update/rotate_secret/test/replay`) send nothing without `yes: true`: they return
+a `dry_run` preview plus a `next` hint naming the `idempotency_key` (or `external_id` for
+`outreach_create`) to pass along when the user confirms, so a retried call runs at most once.
+`outreach_create_template` has no key: a retry after a timeout can leave a duplicate template.
+`outreach_upload_image` reads a local JPG/PNG (anything else is refused before upload).
 
 To run the server manually from a checkout:
 

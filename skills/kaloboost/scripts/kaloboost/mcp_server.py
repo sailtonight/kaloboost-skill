@@ -21,13 +21,16 @@ TOOLS = {
 # model read arbitrary local files, and positional `ids` already covers its use.
 HIDDEN_FLAGS = {"json", "file"}
 # Commands that change state upstream. Those with --yes return a dry run until yes=true.
-WRITES = {c.path for c in COMMANDS if c.flag("--yes") or c.flag("--idempotency-key")}
+WRITES = {c.path for c in COMMANDS if c.flag("--yes") or c.flag("--idempotency-key")} | {"outreach upload-image"}
 DESTRUCTIVE = {"outreach cancel", "webhook update", "webhook rotate-secret"}
 
 
-def _confirm_param(cmd) -> str:
-    # outreach create keys its retries on --external-id; other writes on --idempotency-key.
-    return "idempotency_key" if cmd.flag("--idempotency-key") else "external_id"
+def _confirm_param(cmd) -> str | None:
+    # outreach create keys its retries on --external-id; other writes on --idempotency-key;
+    # outreach create-template has no key at all.
+    if cmd.flag("--idempotency-key"):
+        return "idempotency_key"
+    return "external_id" if cmd.flag("--external-id") else None
 
 
 def create_server():
@@ -65,10 +68,11 @@ def create_server():
         models[name] = model
         description = cmd.summary
         if cmd.flag("--yes"):
+            param = _confirm_param(cmd)
             description += (
                 ". Without yes=true nothing is sent and a dry_run preview is returned: show it to the "
-                f"user, and once they confirm call again with the same arguments, yes=true and the "
-                f"returned {_confirm_param(cmd)}"
+                "user, and once they confirm call again with the same arguments, yes=true"
+                + (f" and the returned {param}" if param else "")
             )
         write = cmd.path in WRITES
         tools.append(types.Tool(
@@ -105,8 +109,8 @@ def create_server():
             param = _confirm_param(cmd)
             payload["next"] = (
                 "Nothing was sent. Show this to the user; once they confirm, call "
-                f"{name} again with the same arguments plus yes=true and "
-                f"{param}={preview['idempotency_key']!r}"
+                f"{name} again with the same arguments plus yes=true"
+                + (f" and {param}={preview['idempotency_key']!r}" if param else "")
             )
         return payload, status != 0
 
@@ -135,9 +139,11 @@ def create_server():
         instructions="Kaloboost TikTok Shop creator outreach. Call shops first for shop_id values "
                      "(the operator may have configured a default shop). IDs are strings. Lists are "
                      "cursor-paged: pass next_cursor back as cursor, or set all=true. Write tools "
-                     "(outreach_create/cancel, webhook_*) reach real creators or change settings: "
-                     "they return a dry_run preview until called with yes=true after the user "
-                     "confirms. Credentials come from the local environment/configuration. "
+                     "(outreach_create/cancel/create_template, webhook_*) reach real creators or change "
+                     "settings: they return a dry_run preview until called with yes=true after the user "
+                     "confirms. Use only the configured API key: never ask the user for browser tokens or "
+                     "cookies. The creator placeholder is ${handle}; merchant contacts must come from the "
+                     "user. Credentials come from the local environment/configuration. "
                      "Results contain raw upstream JSON data.",
         on_list_tools=list_tools, on_call_tool=call_tool,
         get_tool_input_schema=lambda name: models[name].model_json_schema() if name in models else None,

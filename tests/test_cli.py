@@ -1,3 +1,4 @@
+import base64
 import datetime
 import json
 
@@ -382,10 +383,172 @@ def test_outreach_create_validates_locally(capsys, env):
     assert code == 2 and "only apply to --method TIKTOK_TARGET_COLLABORATION" in out
     code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--operator", "a@b.com",
                     "--method", "TIKTOK_TARGET_COLLABORATION", "--template", "C1")
-    assert code == 2 and "--product-template and --expire" in out
-    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--template", "T")
-    assert code == 2 and "--operator is required" in out
+    assert code == 2 and "needs --product-template" in out
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s")
+    assert code == 2 and "inline content, or --template" in out
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--template", "T", "--text", "hi")
+    assert code == 2 and "exclusive" in out
+    code, out = run(capsys, "outreach", "create", *[str(i) for i in range(501)], "--shop", "s", "--template", "T")
+    assert code == 2 and "at most 500 creators" in out
     assert env.requests == []
+
+
+def test_outreach_create_operator_defaults_to_own_account(capsys, env):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t1", "total_count": 1}})
+    code, out = run(capsys, "outreach", "create", "111", "--shop", "s", "--template", "T1", "--yes")
+    assert code == 0
+    assert "operator_account" not in env.requests[0][4]
+    assert "--operator" not in out
+
+
+def test_outreach_create_inline_dm(capsys, env):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t1", "total_count": 1}})
+    code, _ = run(
+        capsys, "outreach", "create", "111", "--shop", "s", "--text", "Hi ${handle}!", "--text", "More",
+        "--image", "img_1", "--card", "p1", "--external-id", "e1", "--yes",
+    )
+    assert code == 0
+    body = env.requests[0][4]
+    assert "template_id" not in body and "invitation" not in body
+    assert body["content"] == {"dm": {"segments": [
+        {"type": "TEXT", "text": "Hi ${handle}!"}, {"type": "TEXT", "text": "More"},
+        {"type": "IMAGE", "image_id": "img_1"}, {"type": "PRODUCT", "product_id": "p1"},
+    ]}}
+
+
+def test_outreach_create_inline_invitation(capsys, env):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t1", "total_count": 1}})
+    code, out = run(
+        capsys, "outreach", "create", "111", "--shop", "s", "--method", "TIKTOK_TARGET_COLLABORATION",
+        "--invite-name", "Zupet bottle", "--invite-message", "Hi ${handle}! Free sample?",
+        "--contact", "whatsapp:812345678:th", "--contact", "EMAIL:hi@shop.co", "--sample-review", "AUTO",
+        "--sync-dm", "Hi ${handle}, sent!", "--sync-dedup", "DAYS_30",
+        "--products", "p1,p2:0.2", "--commission", "0.15", "--at", "2026-11-20", "--yes",
+    )
+    assert code == 0, out
+    body = env.requests[0][4]
+    assert body["invitation"] == {"expire_at": "2026-11-27T00:00:00Z"}
+    assert body["content"] == {
+        "invitation": {
+            "invite_name": "Zupet bottle", "invite_message": "Hi ${handle}! Free sample?",
+            "sample_review_type": "AUTO",
+            "contacts": [{"type": "WHATSAPP", "value": "812345678", "country_code": "TH"},
+                         {"type": "EMAIL", "value": "hi@shop.co"}],
+            "sync_dm": {"dedup_type": "DAYS_30", "segments": [
+                {"type": "TEXT", "text": "Hi ${handle}, sent!"}, {"type": "INVITE_CARD"}]},
+        },
+        "products": [{"product_id": "p1", "commission_rate": "0.15"}, {"product_id": "p2", "commission_rate": "0.2"}],
+    }
+    assert "channel_product_ids" not in body["recipients"][0]
+
+
+def test_outreach_create_content_json(capsys, env):
+    env.responses["/outreach-tasks"] = (202, {"data": {"outreach_task_id": "t1"}})
+    content = {"dm": {"segments": [{"type": "TEXT", "text": "x"}]}}
+    code, _ = run(capsys, "outreach", "create", "1", "--shop", "s", "--content", json.dumps(content), "--yes")
+    assert code == 0 and env.requests[0][4]["content"] == content
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--content", "{}", "--text", "x")
+    assert code == 2 and "replaces the content flags" in out
+
+
+def test_outreach_inline_content_is_checked_locally(capsys, env):
+    base = ("outreach", "create", "1", "--shop", "s")
+    inv = (*base, "--method", "TIKTOK_TARGET_COLLABORATION", "--invite-name", "N", "--invite-message", "M",
+           "--products", "p1")
+    for argv, expect in [
+        ((*base, "--text", "Hi {creator}!"), "unsupported placeholder {creator}"),
+        ((*base, "--text", "Hi @${handle}"), "drop the @"),
+        ((*base, "--text", "Hi {{name}}"), "unsupported placeholder {{name}}"),
+        ((*base, "--image", "img"), "at least one --text"),
+        ((*base, "--text", "x", "--invite-name", "N"), "only apply to --method TIKTOK_TARGET_COLLABORATION"),
+        ((*inv, "--contact", "WHATSAPP:1"), "no commission for product p1"),
+        ((*inv, "--contact", "WHATSAPP:1", "--commission", "15%"), "not a ratio"),
+        ((*inv, "--contact", "WHATSAPP:1", "--commission", "15"), "0.01-0.80"),
+        ((*inv, "--commission", "0.1"), "needs --contact"),
+        ((*inv, "--commission", "0.1", "--contact", "WHATSAPP:REPLACE_WITH_MERCHANT_WHATSAPP_NUMBER"), "placeholder"),
+        ((*inv, "--commission", "0.1", "--contact", "SMS:1"), "invalid --contact"),
+        ((*inv, "--commission", "0.1", "--contact", "WHATSAPP:1", "--text", "x"), "build a DM"),
+        ((*base, "--method", "TIKTOK_TARGET_COLLABORATION", "--invite-name", "Hi ${handle}",
+          "--invite-message", "M", "--contact", "WHATSAPP:1", "--products", "p1:0.1"), "invite name can't hold"),
+    ]:
+        code, out = run(capsys, *argv)
+        assert code == 2 and expect in out, (argv, out)
+    assert env.requests == []
+
+
+def test_outreach_inline_rejection_hints(capsys, env):
+    env.responses["/outreach-tasks"] = err(422, "TEMPLATE_NOT_APPROVED", "content.invitation.contacts[0].type", "CONTACT_INVALID")
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--text", "x", "--yes")
+    assert code == 1 and "never make one up" in out and len(env.requests) == 1
+    env.responses["/outreach-tasks"] = err(503, "CAPABILITY_UNAVAILABLE", "content", "NOT_IMPLEMENTED")
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--text", "x", "--yes")
+    assert code == 1 and "use --template here" in out
+
+
+def test_captcha_503_is_not_retried(capsys, env):
+    env.responses["/outreach-tasks"] = (503, {"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "m"}}, {"Retry-After": "300"})
+    env.requests.clear()
+    code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--text", "x", "--external-id", "e", "--yes")
+    assert code == 1 and len(env.requests) == 1
+    assert "wait at least 300s" in out and "--external-id e" in out
+
+
+def test_outreach_products(capsys, env, monkeypatch):
+    slept = []
+    monkeypatch.setattr("kaloboost.commands.common.time.sleep", slept.append)
+    env.responses["/outreach-products"] = [
+        page([{"product_id": "p1", "title": "Bottle", "price": {"min_format": "$1", "max_format": "$2"},
+               "selectable": True}], cursor="C"),
+        page([{"product_id": "p1", "selectable": True},
+              {"product_id": "p2", "selectable": False, "unselectable_reason": "OUT_OF_STOCK"}]),
+    ]
+    code, out = run(capsys, "outreach", "products", "--shop", "s", "--method", "TIKTOK_TARGET_COLLABORATION",
+                    "--keyword", "bot", "--all")
+    assert code == 0
+    assert "products[2]" in out and "OUT_OF_STOCK" in out and "--products <product_id>" in out
+    q = env.requests[0][2]
+    assert q == {"shop_id": "s", "outreach_method": "TIKTOK_TARGET_COLLABORATION", "keyword": "bot", "limit": "20"}
+    assert slept == [1.0]
+
+
+def test_outreach_upload_image(capsys, env, tmp_path):
+    img = tmp_path / "bottle.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 10)
+    env.responses["/outreach-images"] = {"data": {"image_id": "img_abc", "width": 1, "height": 1}}
+    code, out = run(capsys, "outreach", "upload-image", str(img), "--shop", "s")
+    assert code == 0 and "--image img_abc" in out
+    method, path, _, headers, body = env.requests[0]
+    assert (method, path) == ("POST", "/outreach-images") and "idempotency-key" not in headers
+    assert body["file_name"] == "bottle.png"
+    assert base64.b64decode(body["file_base64"]) == img.read_bytes()
+    bad = tmp_path / "notes.txt"
+    bad.write_text("secret")
+    code, out = run(capsys, "outreach", "upload-image", str(bad), "--shop", "s")
+    assert code == 2 and "not a JPG or PNG" in out and len(env.requests) == 1
+
+
+def test_outreach_create_template(capsys, env):
+    argv = ("outreach", "create-template", "--shop", "s", "--name", "Bottle", "--products", "p1", "--commission", "0.15")
+    code, out = run(capsys, *argv)
+    assert code == 0 and env.requests == [] and out.startswith("dry_run:")
+    assert "idempotency_key" not in out
+    env.responses["/outreach-templates"] = {"data": {"template_id": "tpl1", "template_type": "INVITE_PRODUCT"}}
+    code, out = run(capsys, *argv, "--yes")
+    assert code == 0 and "--product-template tpl1" in out
+    _, path, _, headers, body = env.requests[0]
+    assert path == "/outreach-templates" and "idempotency-key" not in headers
+    assert body == {"shop_id": "s", "template_name": "Bottle",
+                    "products": [{"product_id": "p1", "commission_rate": "0.15"}]}
+    code, out = run(capsys, "outreach", "create-template", "--shop", "s", "--name", "X", "--text", "a",
+                    "--products", "p1")
+    assert code == 2 and "exactly one of" in out
+
+
+def test_outreach_create_template_is_not_retried(capsys, env):
+    env.responses["/outreach-templates"] = err(503, "UPSTREAM_UNAVAILABLE")
+    code, out = run(capsys, "outreach", "create-template", "--shop", "s", "--name", "DM1", "--text", "hi", "--yes")
+    assert code == 1 and len(env.requests) == 1
+    assert "look for 'DM1'" in out
 
 
 def test_outreach_create_503_keeps_key_and_hints_retry(capsys, env):

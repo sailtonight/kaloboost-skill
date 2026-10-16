@@ -3,7 +3,8 @@ name: kaloboost
 description: >
   Work with a TikTok Shop seller's Kaloboost creator outreach via the bundled `boost` CLI
   (Python, zero install): bound shops, creator lookup by handle (contact email, followers, GMV
-  band), sending TikTok DMs / target invitations to creators and canceling them, outreach
+  band), sending TikTok DMs / target invitations to creators (content written inline, with shop
+  products, images and merchant contacts) and canceling them, saving outreach templates, outreach
   progress and per-creator send results, collaboration status, free-sample requests and the
   videos creators posted, creator content metrics, affiliate orders and attribution with
   commission, change events and webhook endpoints. Use whenever the user asks about their
@@ -47,6 +48,12 @@ and don't retry the query. Walk the user through these steps and wait:
    bound in Kaloboost. `boost shops` lists what the key can see; an empty list or a
    `COMPANY_NOT_BOUND` error means this company has no Kaloboost data.
 
+**The API key is the only credential.** Never ask the user for a browser login, password,
+cookie, `localStorage` / `ssoAccessToken` or any other token, and don't try to sign in to the
+Kaloboost website or call its internal APIs: those credentials don't work with this API, and
+going around it is not allowed. On `401` / `403` follow the `help:` lines (`ACCOUNT_NOT_ELIGIBLE`
+names what the account still needs) — another credential won't fix them.
+
 ## First steps in a session
 
 1. `boost shops` — shop ids for `--shop`, and per-shop capabilities. If the user has one shop, or
@@ -67,8 +74,11 @@ and don't retry the query. Walk the user through these steps and wait:
 | `boost outreach list` | outreach tasks + send progress; --since |
 | `boost outreach get <task_id>` | schedule, invitation products, commission |
 | `boost outreach recipients <task_id>` | per-creator send result and failure reason |
-| `boost outreach templates` | a member's DM / invitation templates; --operator --method |
-| `boost outreach create <creator_oecuid...>` | `[write]` send a DM / target invitation to creators |
+| `boost outreach templates` | DM / invitation templates; --method |
+| `boost outreach products` | shop products usable in a DM card / invitation, selectable or why not; --method |
+| `boost outreach upload-image <path>` | JPG/PNG (≤5 MB) → `image_id` for DM image segments (can take ~75s) |
+| `boost outreach create <creator_oecuid...>` | `[write]` send a DM / target invitation, content inline or from a template |
+| `boost outreach create-template` | `[write]` save a DM / invitation template in Kaloboost for reuse |
 | `boost outreach cancel <task_id>` | `[write]` stop what is not sent yet |
 | `boost collab list` | collaboration records: cooperate_status, outreach_result; --since |
 | `boost collab get <id>` | one collaboration record |
@@ -92,22 +102,51 @@ and don't retry the query. Walk the user through these steps and wait:
 (`dry_run:`) and send nothing. Show it to the user, get an explicit yes, then rerun with the flags
 the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add `--yes` on your own.
 
-- **Send outreach**: the message text, products and commission come from a template the member
-  made in the Kaloboost console — the API can't take free text. Flow:
-  1. `boost creator resolve @handle --region <shop region>` → creator_oecuid
-  2. `boost outreach templates --shop S --operator <member> --method TIKTOK_DM` → template_id
-     (target invitations: `--method TIKTOK_TARGET_COLLABORATION`, a content template plus an
-     `--type INVITE_PRODUCT` template)
-  3. `boost outreach create <oecuid...> --shop S --operator <member> --template <id>` → dry run
-     (invitations add `--method TIKTOK_TARGET_COLLABORATION --product-template <id> --expire 14d`)
-  4. user confirms → same command + `--external-id <id from the hint> --yes`
-  5. `boost outreach recipients <task_id> --shop S` for per-creator results
-- `--operator` is the Kaloboost member the task runs as (login email or `'+86 13800000000'`); the
-  member must manage the shop. Up to 500 creators per task (`--file` for long lists); `--at`
-  schedules up to 90 days ahead.
+- **Send outreach** — write the content inline; no template or Kaloboost console needed:
+  1. `boost creator resolve @handle --region <shop region>` → `creator_oecuid` (only `MATCHED`;
+     tell the user about `NOT_FOUND` / `AMBIGUOUS`, don't guess). This API can't search creators
+     by category / followers / region — the user supplies the handles.
+  2. Products (invitations need them; DMs only for a product card):
+     `boost outreach products --shop S --method <METHOD>` → use only `selectable=true` ids.
+  3. Optional DM image: `boost outreach upload-image ./pic.png --shop S` → `image_id`.
+  4. Dry run, then the user confirms, then the same command + `--external-id <id from the hint> --yes`:
+     - DM: `boost outreach create <oecuid...> --shop S --text 'Hi ${handle}! ...' [--image <image_id>] [--card <product_id>]`
+     - Target invitation: `boost outreach create <oecuid...> --shop S --method TIKTOK_TARGET_COLLABORATION
+       --invite-name '<≤26 chars>' --invite-message 'Hi ${handle}! ...' --contact WHATSAPP:<number>
+       --products <id>[,<id>:0.2] --commission 0.15 [--sync-dm 'Hi ${handle}, just sent you an invite!']`
+  5. `boost outreach recipients <task_id> --shop S` for per-creator results (`Accepted` ≠ sent).
+- **Content rules** (checked before sending):
+  - The creator placeholder is `${handle}` — it becomes the creator's TikTok username, without
+    `@`; don't put `@` in front. Any other form (`{creator}`, `{{name}}`, `$name`) is rejected.
+    **Single-quote** text with `${handle}` in a shell, or the shell replaces it with nothing.
+  - `--contact` is the merchant's real WhatsApp / email / LINE / … that creators reply to. Ask the
+    user for it; never invent one or reuse an example. Numbers without country prefix or `+`
+    (`WHATSAPP:812345678:TH`; the country code defaults to the shop's market).
+  - Commission is a ratio 0.01–0.80: 15% is `0.15`. Invite name ≤26 characters, no placeholder;
+    invite message ≤500 characters, no emoji. DMs: ≤5 segments, ≤3 images, ≤1950 chars per text.
+  - Inline content is all-or-nothing: an unavailable product or bad contact rejects the request
+    (nothing is created) — fix what the error names and send again.
+- **Templates** are only for content the merchant wants to reuse. `boost outreach templates` lists
+  them; `boost outreach create-template --name ... <same content flags>` saves one (an invitation
+  needs two: content, and products). Send with `--template <id>` (invitations add
+  `--product-template <id>`); template content can't be overridden per request.
+- `--operator` is optional: without it everything runs as the key's own Kaloboost account, which
+  is what the user normally wants. Only pass a member (login email or `'+86 13800000000'`) when
+  the user asks to act as that member or `SHOP_NOT_AUTHORIZED [operator_account/...]` says the own
+  account can't manage the shop — then ask the user which member to use; never pick one yourself.
+- Up to 500 creators per task (the API's fixed limit; split longer lists into several tasks, each
+  with its own external id; `--file` for long lists). Invitations expire 7 days after the start
+  by default (`--expire`); `--at` schedules up to 90 days ahead.
+- Outreach calls (create, create-template, upload-image, products) share a limit of 1 call per
+  second: run them one at a time. A `503` asking to wait minutes (TikTok verification for the
+  shop) means stop and tell the user — don't retry right away.
 - **Retrying**: if a write ends with "outcome is unknown" (timeout / 503), rerun the identical
   command with the `--external-id` / `--idempotency-key` the hint shows — it then runs at most
   once. Never retry an outreach with a new external id: that sends a second task.
+  `create-template` has no such key: check `boost outreach templates` for it before retrying.
+- `CAPABILITY_UNAVAILABLE ... NOT_IMPLEMENTED` on inline content, products, images or template
+  creation means this environment (the test env) doesn't have them yet: tell the user; don't
+  work around it.
 - Sent messages and invitations can't be recalled; `outreach cancel` only stops unsent ones.
 
 ## Conventions
@@ -155,3 +194,6 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
   into one event, so they are not a step-by-step history. Webhooks push the same events.
 - **Outreach create** answers `Accepted` before anything is sent; target invitations skip creators
   already invited, so `total_count` can be below the number you sent.
+- **Stay inside this CLI.** For Kaloboost questions answer from what `boost` returns, scoped to the
+  key's own company. Don't go looking for Kaloboost databases, tables or web-console APIs, and
+  don't mix in data from other tools unless the user asks for it.

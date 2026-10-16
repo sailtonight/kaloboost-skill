@@ -105,6 +105,13 @@ def test_webhook_dry_run_names_idempotency_key(env):
     assert env.requests == []
 
 
+def test_create_template_dry_run_needs_only_yes(env):
+    result = call("outreach_create_template", {"shop": "s", "name": "T", "text": ["hi"]})
+    assert result.structured_content["data"]["dry_run"]["body"]["dm"] == {"segments": [{"type": "TEXT", "text": "hi"}]}
+    assert result.structured_content["next"].endswith("plus yes=true")
+    assert env.requests == []
+
+
 def test_missing_key_is_actionable(env, monkeypatch):
     monkeypatch.delenv("KALODATA_API_KEY")
     result = call("capabilities", {})

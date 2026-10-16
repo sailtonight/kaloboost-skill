@@ -109,7 +109,8 @@ _CURSOR_HELP = (
 
 _SHOP_HINTS = {
     "COMPANY_NOT_BOUND": "The company this key belongs to has no Kaloboost account — Kaloboost data is unavailable for it",
-    "OPERATOR_NOT_FOUND": "No member with this --operator account in the company; use the member's Kaloboost login email or '+CC NUMBER'",
+    "OPERATOR_NOT_FOUND": "No member with this account in the company — without --operator the key's own account is used; "
+    "ask the user which member (login email or '+CC NUMBER') should run it",
     "OPERATOR_DISABLED": "This --operator member is disabled in Kaloboost; pick another member",
     "SHOP_NOT_ASSIGNED_TO_USER": "This --operator member is not assigned to --shop; pick a member who manages the shop",
 }
@@ -124,7 +125,29 @@ _CHANNEL_HINTS = {
     "PRODUCT_NOT_IN_SHOP": "A --products id does not belong to --shop",
     "PRODUCT_NOT_FOUND": "A --products id is unknown to the shop's product data; check it, or retry later for new products",
     "UNSUPPORTED": "Use --method TIKTOK_DM or TIKTOK_TARGET_COLLABORATION",
+    "PRODUCTS_UNAVAILABLE": "The shop can't list products for this channel now — send a text-only DM, or ask the merchant "
+    "to check the shop's authorization in Kaloboost",
+    "IMAGE_REQUIRES_COOKIE": "Images need the merchant to re-authorize the shop in the Kaloboost console — send text only "
+    "for now; never ask the user for cookies or tokens",
 }
+
+_CONTENT_HINTS = {
+    "PLACEHOLDER_INVALID": "Write the creator placeholder as ${handle} (no @ in front); invite names can't hold any placeholder",
+    "CONTACT_INVALID": "Ask the user for the merchant's real contact of a type this market accepts — never make one up",
+    "PRODUCT_NOT_AVAILABLE": "Use only selectable=true ids from `boost outreach products --shop <SHOP_ID> --method <METHOD>`",
+    "COMMISSION_INVALID": "Commission is a ratio from 0.01 to 0.80 with at most 4 decimals: 15% is 0.15",
+    "SENSITIVE_WORD": "The text hits a TikTok sensitive word — reword it",
+    "INVITE_NAME_INVALID": "Invite name: 1-26 characters, no placeholder",
+    "INVITE_MESSAGE_INVALID": "Invite message: 1-500 characters, no emoji",
+    "SEGMENT_TOO_LONG": "DM text: at most 1950 characters per --text (sync DM: 2000)",
+    "SEGMENT_COUNT_EXCEEDED": "DM: at most 5 segments (--text, --image, --card together)",
+    "IMAGE_COUNT_EXCEEDED": "DM: at most 3 --image",
+    "CONTENT_REQUIRED": "Give at least one non-blank --text",
+    "IMAGE_REQUIRES_COOKIE": _CHANNEL_HINTS["IMAGE_REQUIRES_COOKIE"],
+    "EXPIRE_AT_INVALID": "The invitation expiry is no longer valid — use --expire 7d",
+}
+
+_CONTENT_ROOTS = ("content", "dm", "invitation.invite", "invitation.contacts", "invitation.sync_dm", "products")
 
 _CONFLICT_HINTS = {
     "DIFFERENT_REQUEST_BODY": "This key was already used for a different request — drop --idempotency-key "
@@ -149,7 +172,7 @@ def _not_eligible(text: str, err: dict) -> BoostError:
     return BoostError(text, kind="auth", help_lines=["The account behind this key is not eligible for Kaloboost OpenAPI yet"])
 
 
-def _translate(status: int, err: dict, request_id: str | None) -> BoostError:
+def _translate(status: int, err: dict, request_id: str | None, retry_after: float | None = None) -> BoostError:
     code = str(err.get("code") or f"HTTP_{status}")
     message = str(err.get("message") or "").strip()
     field, reason = _reason(err)
@@ -194,16 +217,26 @@ def _translate(status: int, err: dict, request_id: str | None) -> BoostError:
         hint = _CHANNEL_HINTS.get(reason) or "This shop's market does not support this feature; authorizing won't help, don't retry"
         return BoostError(text, kind="access", help_lines=[hint])
     if code == "TEMPLATE_NOT_APPROVED":
+        if str(field or "").startswith(_CONTENT_ROOTS) or reason in _CONTENT_HINTS:
+            hint = _CONTENT_HINTS.get(reason) or "Fix the inline content the message points at, then send again"
+            return BoostError(text, kind="parameter", help_lines=[hint, "Nothing was created — fix it and rerun"])
         return BoostError(
             text, kind="parameter",
             help_lines=[
-                "List usable ids with `boost outreach templates --shop <SHOP_ID> --operator <ACCOUNT> --method <METHOD>`",
-                "Template text, products, commission and contact live in the Kaloboost console — fix them there",
+                "List usable ids with `boost outreach templates --shop <SHOP_ID> --method <METHOD>` — templates belong "
+                "to a member, so pass the same --operator (default: the key's own account) as for create",
+                "Or skip templates: send the content inline (`boost outreach create --help`)",
             ],
         )
     if code == "CAPABILITY_UNAVAILABLE":
         if field == "shop_id":
             hint = "Events are not enabled for this shop yet — ask Kaloboost to enable it; retrying won't help"
+        elif reason == "NOT_IMPLEMENTED" and field == "content":
+            hint = ("Inline content is not open in this environment (the test env) — use --template here, or the "
+                    "production endpoint; don't retry or work around it")
+        elif reason == "NOT_IMPLEMENTED" and field == "outreach":
+            hint = ("Products, image upload and template creation are not open in this environment (the test env) — "
+                    "use the production endpoint; don't retry or work around it")
         elif reason == "NOT_IMPLEMENTED":
             hint = "This endpoint is not live on the server yet — retrying won't help"
         else:
@@ -220,6 +253,12 @@ def _translate(status: int, err: dict, request_id: str | None) -> BoostError:
         else:
             hint = "Rate limited — wait a few seconds; page through one shop at a time, not in parallel"
         return BoostError(text, kind="network", help_lines=[hint])
+    if (code == "UPSTREAM_UNAVAILABLE" or status >= 500) and retry_after and retry_after > _MAX_RETRY_AFTER:
+        return BoostError(
+            text, kind="network",
+            help_lines=[f"TikTok wants this shop to pass a verification — wait at least {int(retry_after)}s before "
+                        "trying again (don't retry now); the merchant may need to act in the Kaloboost console"],
+        )
     if code == "UPSTREAM_UNAVAILABLE" or status >= 500:
         return BoostError(text, kind="network", help_lines=["Kaloboost is temporarily unavailable; retry shortly"])
     return BoostError(text)
@@ -234,11 +273,14 @@ def request(
     body: dict | None = None,
     headers: dict | None = None,
     timeout: float = 30.0,
+    retry: bool = True,
 ) -> dict:
     """Call base_url+path; return the success envelope {data, page?, request_id?}.
 
     Retries (network errors, 429, 5xx) resend the identical request, so write
-    calls must carry their Idempotency-Key in `headers`.
+    calls must carry their Idempotency-Key in `headers`. Writes that can't
+    (template creation) pass retry=False: only a 429, which was never
+    processed, is retried then.
     """
     _require_auth(cfg)
     url = cfg.base_url.rstrip("/") + path
@@ -273,10 +315,15 @@ def request(
                 if wait <= _MAX_RETRY_AFTER:
                     raise _Retryable(f"HTTP 429 {code or ''}".strip(), wait=wait)
             elif status >= 500 and code != "CAPABILITY_UNAVAILABLE":
-                raise _Retryable(f"HTTP {status} {code or ''}".strip())
+                wait = _retry_after(resp_headers) if resp_headers.get("Retry-After") else None
+                if retry and not (wait and wait > _MAX_RETRY_AFTER):
+                    raise _Retryable(f"HTTP {status} {code or ''}".strip())
+                raise _translate(status, err, rid, wait)
             raise _translate(status, err, rid)
         except _Retryable as e:
             last = str(e)
+            if not retry and e.wait is None:
+                raise BoostError(f"Kaloboost did not answer ({last})", kind="network", help_lines=[]) from None
             if attempt < _RETRIES - 1:
                 time.sleep(e.wait if e.wait else 0.3 * (attempt + 1) + random.uniform(0, 0.2))
     raise BoostError(
