@@ -183,6 +183,7 @@ def send(
     confirm: bool = True,
     confirm_flags: str = "--yes",
     idempotent: bool = True,
+    timeout: float = 30.0,
 ) -> dict | None:
     """Run a write call with an Idempotency-Key; without --yes print it instead (returns None).
 
@@ -213,7 +214,7 @@ def send(
             ])
         return None
     try:
-        return api.request(cfg, method, path, params=query, body=body, headers={"Idempotency-Key": key})
+        return api.request(cfg, method, path, params=query, body=body, headers={"Idempotency-Key": key}, timeout=timeout)
     except BoostError as e:
         if e.kind == "network" or "IN_PROGRESS" in str(e):
             e.help_lines.append(f"The outcome is unknown — retry the identical command with {retry_hint} so it runs at most once")

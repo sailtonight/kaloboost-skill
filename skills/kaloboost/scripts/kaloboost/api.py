@@ -152,8 +152,8 @@ _CONTENT_ROOTS = ("content", "dm", "invitation.invite", "invitation.contacts", "
 _CONFLICT_HINTS = {
     "DIFFERENT_REQUEST_BODY": "This key was already used for a different request — drop --idempotency-key "
     "(or use a new --external-id) to start a new operation",
-    "IN_PROGRESS": "The first attempt with this key is still running — rerun the same command with the same key "
-    "in a few seconds (it settles within 60s); a new key could run it twice",
+    "IN_PROGRESS": "The first attempt with this key is still running (large outreach tasks take 1-3 minutes) — "
+    "rerun the same command with the same key every 15-30s, for up to ~6.5 minutes; a new key could run it twice",
     "EXTERNAL_ID_IN_USE": "This --external-id already created a task — it exists: look for it with "
     "`boost outreach list --shop <SHOP_ID> --since 1d`; for a new task use a new --external-id",
 }

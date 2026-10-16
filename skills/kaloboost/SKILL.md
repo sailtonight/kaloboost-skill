@@ -115,12 +115,14 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
        --invite-name '<≤26 chars>' --invite-message 'Hi ${handle}! ...' --contact WHATSAPP:<number>
        --products <id>[,<id>:0.2] --commission 0.15 [--sync-dm 'Hi ${handle}, just sent you an invite!']`
   5. `boost outreach recipients <task_id> --shop S` for per-creator results (`Accepted` ≠ sent).
+     Failures such as `TARGET_INVITATION_UNAVAILABLE_CREATOR` are about the creator, not the
+     request: report them and ask the user for other creators instead of resending.
 - **Content rules** (checked before sending):
   - The creator placeholder is `${handle}` — it becomes the creator's TikTok username, without
     `@`; don't put `@` in front. Any other form (`{creator}`, `{{name}}`, `$name`) is rejected.
     **Single-quote** text with `${handle}` in a shell, or the shell replaces it with nothing.
   - `--contact` is the merchant's real WhatsApp / email / LINE / … that creators reply to. Ask the
-    user for it; never invent one or reuse an example. Numbers without country prefix or `+`
+    user for it; never invent one, reuse an example, or take a member's login phone / email for it. Numbers without country prefix or `+`
     (`WHATSAPP:812345678:TH`; the country code defaults to the shop's market).
   - Commission is a ratio 0.01–0.80: 15% is `0.15`. Invite name ≤26 characters, no placeholder;
     invite message ≤500 characters, no emoji. DMs: ≤5 segments, ≤3 images, ≤1950 chars per text.
@@ -134,9 +136,9 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
   is what the user normally wants. Only pass a member (login email or `'+86 13800000000'`) when
   the user asks to act as that member or `SHOP_NOT_AUTHORIZED [operator_account/...]` says the own
   account can't manage the shop — then ask the user which member to use; never pick one yourself.
-- Up to 500 creators per task (the API's fixed limit; split longer lists into several tasks, each
-  with its own external id; `--file` for long lists). Invitations expire 7 days after the start
-  by default (`--expire`); `--at` schedules up to 90 days ahead.
+- Up to 10,000 creators per task — no need to split (`--file` for long lists). Big tasks take 1–3
+  minutes to create; the CLI waits for them, so let it run. Invitations expire 7 days after the
+  start by default (`--expire`); `--at` schedules up to 90 days ahead.
 - Outreach calls (create, create-template, upload-image, products) share a limit of 1 call per
   second: run them one at a time. A `503` asking to wait minutes (TikTok verification for the
   shop) means stop and tell the user — don't retry right away.

@@ -388,8 +388,8 @@ def test_outreach_create_validates_locally(capsys, env):
     assert code == 2 and "inline content, or --template" in out
     code, out = run(capsys, "outreach", "create", "1", "--shop", "s", "--template", "T", "--text", "hi")
     assert code == 2 and "exclusive" in out
-    code, out = run(capsys, "outreach", "create", *[str(i) for i in range(501)], "--shop", "s", "--template", "T")
-    assert code == 2 and "at most 500 creators" in out
+    code, out = run(capsys, "outreach", "create", *[str(i) for i in range(10001)], "--shop", "s", "--template", "T")
+    assert code == 2 and "at most 10000 creators" in out
     assert env.requests == []
 
 
@@ -565,6 +565,27 @@ def test_outreach_create_conflict_hints(capsys, env):
     code, out = run(capsys, *DM, "--yes")
     assert code == 1
     assert "already created a task" in out
+
+
+def test_outreach_create_waits_for_in_progress(capsys, env, monkeypatch):
+    slept = []
+    monkeypatch.setattr("kaloboost.commands.outreach.time.sleep", slept.append)
+    env.responses["/outreach-tasks"] = [
+        err(409, "IDEMPOTENCY_CONFLICT", "Idempotency-Key", "IN_PROGRESS"),
+        (202, {"data": {"outreach_task_id": "t5", "total_count": 1}}),
+    ]
+    code, out = run(capsys, *DM, "--external-id", "ext-9", "--yes")
+    assert code == 0 and "t5" in out
+    assert [r[3]["idempotency-key"] for r in env.requests] == ["ext-9", "ext-9"]
+    assert slept == [20.0]
+
+
+def test_outreach_recipients_explain_creator_failures(capsys, env):
+    env.responses["/outreach-tasks/t1/recipients"] = page([
+        {"creator_oecuid": "1", "send_status": "SEND_FAILED", "error_code": "TARGET_INVITATION_UNAVAILABLE_CREATOR"},
+    ])
+    code, out = run(capsys, "outreach", "recipients", "t1", "--shop", "s")
+    assert code == 0 and "ask the user for other creators" in out
 
 
 def test_outreach_cancel(capsys, env):

@@ -8,6 +8,7 @@ import decimal
 import json
 import re
 import secrets
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -17,7 +18,12 @@ from ..errors import BoostError, UsageError
 from . import common
 
 METHODS = ("TIKTOK_DM", "TIKTOK_TARGET_COLLABORATION")
-RECIPIENT_MAX = 500  # /capabilities limits.outreach_recipient_limit, a v1 contract constant
+RECIPIENT_MAX = 10000  # /capabilities limits.outreach_recipient_limit, a v1 contract constant
+# Big tasks are built synchronously: 15-80s, sometimes 2-3 min; a timed-out attempt keeps building
+# server-side and answers 409 IN_PROGRESS to same-key retries for up to 390s.
+CREATE_TIMEOUT = 210.0
+IN_PROGRESS_WAIT = 20.0
+IN_PROGRESS_DEADLINE = 400.0
 PRODUCT_MAX = 100
 CONTACT_TYPES = ("WHATSAPP", "EMAIL", "LINE", "ZALO", "VIBER", "FACEBOOK", "TELEGRAM", "PHONE")
 NO_COUNTRY = ("EMAIL", "FACEBOOK")
@@ -35,6 +41,15 @@ PRODUCT_KEYS = ("commission", "ads_commission")
 _PLACEHOLDER = re.compile(r"\$\{[^}]*\}|\{\{[^}]*\}\}|\{[^{}]*\}|\$[A-Za-z_]\w*")
 _ALLOWED_PLACEHOLDERS = {"${handle}", "{{creators username}}", "{{user_name}}"}
 OPEN_STATUSES = {"ACCEPTED", "QUEUED", "SCHEDULED", "RUNNING", "PAUSED"}
+
+RECIPIENT_ERROR_HINTS = {
+    "TARGET_INVITATION_UNAVAILABLE_CREATOR": "TARGET_INVITATION_UNAVAILABLE_CREATOR: TikTok doesn't let this creator "
+    "receive target invitations — sending again won't help; ask the user for other creators",
+    "CREATOR_OPENID_NOT_RETRIEVED": "CREATOR_OPENID_NOT_RETRIEVED: TikTok couldn't identify this creator for the shop — "
+    "skip them or try later",
+    "TARGET_INVITATION_QUOTA_LIMIT": "TARGET_INVITATION_QUOTA_LIMIT: the shop's invitation quota is used up — "
+    "it refills later; send to fewer creators or wait",
+}
 
 TASK_FIELDS = (
     "outreach_task_id", "task_name", "method", "type", "status",
@@ -136,6 +151,8 @@ def recipients(cfg, opts, args):
         "this page: " + ", ".join(f"{k} {v}" for k, v in sorted(tally.items(), key=lambda kv: -kv[1])),
         "Creator profile: `boost creator get <creator_oecuid> --region <shop region>`",
     ]
+    errors = {r.get("error_code") for r in rows}
+    hints += [hint for code, hint in RECIPIENT_ERROR_HINTS.items() if code in errors]
     base = common.again("outreach recipients", task, *common.flag_pairs(shop=shop))
     render.emit_help(common.page_hints(rows, cursor, pages, base, opts, hints))
     return 0
@@ -394,10 +411,19 @@ def create(cfg, opts, args):
     body["recipients"] = recipients
 
     ext = body["external_task_id"]
-    env = common.send(
-        cfg, opts, "POST", "/outreach-tasks", body=body, key=ext, retry_hint=f"--external-id {ext}",
-        confirm_flags=f"--external-id {ext} --yes",
-    )
+    deadline = time.monotonic() + IN_PROGRESS_DEADLINE
+    while True:
+        try:
+            env = common.send(
+                cfg, opts, "POST", "/outreach-tasks", body=body, key=ext, retry_hint=f"--external-id {ext}",
+                confirm_flags=f"--external-id {ext} --yes", timeout=CREATE_TIMEOUT,
+            )
+            break
+        except BoostError as e:
+            # an earlier attempt (timed out on our side) is still building the task: wait for it
+            if "IN_PROGRESS" not in str(e) or time.monotonic() >= deadline:
+                raise
+            time.sleep(IN_PROGRESS_WAIT)
     if env is None:
         return 0
     data = env.get("data") or {}
