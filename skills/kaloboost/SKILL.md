@@ -1,13 +1,14 @@
 ---
 name: kaloboost
 description: >
-  Use for TikTok Shop creator outreach and affiliate operations: DM or invite
-  creators (content, shop products, images inline) and cancel outreach, look up creators by
-  handle (email, followers, GMV), save templates, track outreach progress and per-creator
-  results, collaboration status, free samples, creator videos and metrics, affiliate orders
-  and commission, webhooks — 达人建联、发私信/定向邀约、建联进度、取消建联、合作状态、寄样/申样、
-  达人视频、联盟订单、佣金归因、事件推送. Runs Kaloboost via the bundled `boost` CLI (Python,
-  zero install). Use even if the user never says "kaloboost".
+  Use for TikTok Shop creator outreach and affiliate operations, or any question about the
+  user's Kaloboost account: DM or invite creators (content, shop products, images inline) and
+  cancel outreach, look up creators by handle (email, followers, GMV), save templates, track
+  outreach progress and per-creator results, collaboration status, free samples, creator
+  videos and metrics, affiliate orders and commission, change events and webhooks — 达人建联、
+  发私信/定向邀约、建联进度、取消建联、合作状态、寄样/申样、达人视频、联盟订单、佣金归因、事件推送.
+  Runs via the bundled `boost` CLI (Python, zero install); use it even if the user never
+  says "kaloboost".
 ---
 
 # Kaloboost creator outreach (`boost`)
