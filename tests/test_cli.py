@@ -760,6 +760,7 @@ def test_chat_send_validates_locally(capsys, env):
         (("--text", "x" * 501, "--product", "1"), "at most 500"),
         (("--text", "x", "--product", "1,2,3,4,5,6"), "1-5 products"),
         (("--product", "1,2"), "one --product"),
+        (("--product", "abc"), "must be TikTok product ids"),
         (("--collab", "1", "--text", "x"), "card of its own"),
         (("--text", "x", "--title", "t"), "--title only"),
         (("--text", "x", "--image", "u", "--product", "1"), "not both"),
@@ -778,6 +779,17 @@ def test_chat_send_outcome_unknown_is_not_retried(capsys, env):
     assert len(env.requests) == 1
     assert "may already have been sent" in out
     assert "retry the identical command" not in out
+    assert "retry shortly" not in out
+
+
+def test_chat_send_not_submitted_exhausted_keeps_verdict(capsys, env):
+    env.responses["/chat/conversations/c1/messages"] = err(
+        503, "UPSTREAM_UNAVAILABLE", "submission", "NOT_SUBMITTED")
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hi", "--idempotency-key", "k", "--yes")
+    assert code == 1
+    assert len(env.requests) == 3
+    assert "Not sent to TikTok" in out
+    assert "may have been sent" not in out and "unreachable" not in out
 
 
 def test_chat_send_not_submitted_is_retried_with_same_key(capsys, env):

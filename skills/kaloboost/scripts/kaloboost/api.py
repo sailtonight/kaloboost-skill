@@ -209,7 +209,8 @@ def _translate(status: int, err: dict, request_id: str | None, retry_after: floa
     e.submission = _submission(err)
     hint = _SUBMISSION_HINTS.get(e.submission)
     if hint:
-        e.help_lines.insert(0, hint)
+        # OUTCOME_UNKNOWN overrides generic "retry shortly" advice: the message may be out already
+        e.help_lines = [hint] if e.submission == "OUTCOME_UNKNOWN" else [hint, *e.help_lines]
     return e
 
 
@@ -361,7 +362,9 @@ def request(
                     err = parsed if "code" in parsed else {"message": str(err or "")}
                 rid = parsed.get("request_id")
             code = err.get("code")
-            if _submission(err) == "OUTCOME_UNKNOWN":
+            submission = _submission(err)
+            # never resend what may have reached TikTok; on the last try keep what the server said
+            if submission == "OUTCOME_UNKNOWN" or (submission and attempt == _RETRIES - 1):
                 raise _translate(status, err, rid)
             if status == 429:
                 wait = _retry_after(resp_headers)

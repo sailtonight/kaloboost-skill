@@ -229,7 +229,7 @@ def _content(opts) -> tuple[str, dict]:
         raise UsageError("--title only goes with --text plus --image or --product")
     if mtype != "IMAGE" and (opts.get("width") or opts.get("height")):
         raise UsageError("--width/--height only go with --image alone")
-    if mtype == "CRM_TEXT_WITH_PRODUCTS_CARD" and not all(p.isdigit() and p.strip("0") for p in products):
+    if products and not all(p.isdigit() and p.strip("0") for p in products):
         raise UsageError("--product ids must be TikTok product ids (digits)",
                          ["List them with `boost outreach products --shop <SHOP_ID>`"])
     return mtype, content
@@ -268,16 +268,17 @@ def send(cfg, opts, args):
 def _image(path: str) -> tuple[bytes, str, str]:
     p = Path(path).expanduser()
     try:
-        raw = p.read_bytes()
+        with p.open("rb") as f:
+            raw = f.read(IMAGE_MAX_BYTES + 1)  # never load more than the limit
     except OSError as e:
         raise UsageError(f"cannot read {path}: {e.strerror or e}") from None
+    if len(raw) > IMAGE_MAX_BYTES:
+        raise UsageError(f"{path} is over {IMAGE_MAX_BYTES:,} bytes, the chat image limit")
     ctype = next((t for magic, t in _IMAGE_TYPES if raw.startswith(magic)), None)
     if ctype is None and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
         ctype = "image/webp"
     if ctype is None:
         raise UsageError(f"{path} is not a JPG, PNG, GIF or WebP image")
-    if len(raw) > IMAGE_MAX_BYTES:
-        raise UsageError(f"{path} is {len(raw)} bytes; chat images are at most {IMAGE_MAX_BYTES:,} bytes")
     return raw, p.name or "image", ctype
 
 
@@ -335,7 +336,9 @@ def set_status(cfg, opts, args):
         common.dump_json(data)
         return 0
     render.emit_detail("conversation_status", data)
-    render.emit_help([f"See them: `boost chat list --shop {shop} --status {'ARCHIVED' if action == 'ARCHIVED' else 'STARRED'}`"])
+    listed = {"STARRED": "STARRED", "ARCHIVED": "ARCHIVED"}.get(action)
+    if listed:
+        render.emit_help([f"See them: `boost chat list --shop {shop} --status {listed}`"])
     return 0
 
 

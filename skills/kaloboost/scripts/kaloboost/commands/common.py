@@ -192,7 +192,8 @@ def send(
 
     The key is reused across the client's automatic retries, and surfaced when
     the outcome is unknown (network / 5xx / in-progress) so the caller can retry
-    the same operation without running it twice. `idempotent=False` is for
+    the same operation without running it twice — unless the error carries a chat
+    `submission` verdict, whose own hint (api._SUBMISSION_HINTS) says what to do. `idempotent=False` is for
     endpoints without keys (template creation): no key, no automatic retry.
     """
     if not idempotent:

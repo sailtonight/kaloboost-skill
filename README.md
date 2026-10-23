@@ -144,12 +144,14 @@ Tools return raw JSON under `data`, matching the CLI's `--json` mode; `json` and
 (local file input) are not exposed. Lists return `next_cursor`; pass it back as `cursor`,
 or set `all: true`.
 
-Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`,
+Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`, `chat_send`,
 `webhook_create/update/rotate_secret/test/replay`) send nothing without `yes: true`: they return
 a `dry_run` preview plus a `next` hint naming the `idempotency_key` (or `external_id` for
 `outreach_create`) to pass along when the user confirms, so a retried call runs at most once.
 `outreach_create_template` has no key: a retry after a timeout can leave a duplicate template.
 `outreach_upload_image` reads a local JPG/PNG (anything else is refused before upload).
+`chat_upload_image` (JPG/PNG/GIF/WebP), `chat_open`, `chat_read` and `chat_status` act at once —
+they send nothing to the creator, and take an `idempotency_key` for safe retries.
 
 To run the server manually from a checkout:
 
