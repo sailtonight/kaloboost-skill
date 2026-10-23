@@ -17,7 +17,10 @@ REGIONS = (
     "US", "ID", "VN", "TH", "MY", "PH", "MX", "BR", "GB",
     "DE", "ES", "SG", "FR", "JP", "IT", "NL", "IE", "PL",
 )
-EVENT_TYPES = ("outreach.task.updated", "outreach.recipient.updated", "collaboration.updated", "sample.updated")
+EVENT_TYPES = (
+    "outreach.task.updated", "outreach.recipient.updated", "collaboration.updated", "sample.updated",
+    "chat.message.created",
+)
 PAGE_MAX = 100
 ALL_MAX_PAGES = 20  # --all safety cap: 20 pages x 100 rows
 
@@ -35,9 +38,9 @@ def region_flag() -> Flag:
     return Flag("--region", "creator market: " + " ".join(REGIONS), default="US", metavar="REGION")
 
 
-def page_flags(default_limit: int = 20, max_pages: int = ALL_MAX_PAGES) -> list[Flag]:
+def page_flags(default_limit: int = 20, max_pages: int = ALL_MAX_PAGES, max_limit: int = PAGE_MAX) -> list[Flag]:
     return [
-        Flag("--limit", f"rows per page (1-{PAGE_MAX})", kind="int", default=default_limit, min=1, max=PAGE_MAX),
+        Flag("--limit", f"rows per page (1-{max_limit})", kind="int", default=default_limit, min=1, max=max_limit),
         Flag("--cursor", "continue from a previous page's next_cursor", metavar="CURSOR"),
         Flag("--all", f"follow next_cursor automatically (up to {max_pages} pages)", kind="flag", default=False),
     ]
@@ -86,10 +89,10 @@ def region(opts) -> str:
     return value
 
 
-def limit(opts) -> int:
+def limit(opts, max_limit: int = PAGE_MAX) -> int:
     value = int(opts.get("limit") or 20)
-    if not 1 <= value <= PAGE_MAX:
-        raise UsageError(f"--limit must be 1-{PAGE_MAX}, got {value}")
+    if not 1 <= value <= max_limit:
+        raise UsageError(f"--limit must be 1-{max_limit}, got {value}")
     return value
 
 
@@ -216,7 +219,7 @@ def send(
     try:
         return api.request(cfg, method, path, params=query, body=body, headers={"Idempotency-Key": key}, timeout=timeout)
     except BoostError as e:
-        if e.kind == "network" or "IN_PROGRESS" in str(e):
+        if e.submission is None and (e.kind == "network" or "IN_PROGRESS" in str(e)):
             e.help_lines.append(f"The outcome is unknown — retry the identical command with {retry_hint} so it runs at most once")
         raise
 
@@ -244,6 +247,7 @@ def _send_once(cfg, opts, method, path, *, query, body, confirm, confirm_flags) 
 def fetch_pages(
     cfg, path: str, params: dict, opts, *,
     stop_on_empty: bool = False, stream: bool = False, max_pages: int = ALL_MAX_PAGES, pace: float = 0.0,
+    max_limit: int = PAGE_MAX,
 ):
     """One page, or every page with --all. Returns (rows, next_cursor, pages_read).
 
@@ -254,7 +258,7 @@ def fetch_pages(
     which always hands back a cursor to poll with later: `has_more` ends the loop.
     `pace` waits that many seconds between pages, for endpoints limited to 1/s.
     """
-    params = dict(params, limit=limit(opts))
+    params = dict(params, limit=limit(opts, max_limit))
     cursor = opts.get("cursor")
     rows: list = []
     pages = 0

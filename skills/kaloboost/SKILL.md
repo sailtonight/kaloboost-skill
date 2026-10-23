@@ -4,9 +4,10 @@ description: >
   Use for TikTok Shop creator outreach and affiliate operations, or any question about the
   user's Kaloboost account: DM or invite creators (content, shop products, images inline) and
   cancel outreach, look up creators by handle (email, followers, GMV), save templates, track
-  outreach progress and per-creator results, collaboration status, free samples, creator
-  videos and metrics, affiliate orders and commission, change events and webhooks — 达人建联、
-  发私信/定向邀约、建联进度、取消建联、合作状态、寄样/申样、达人视频、联盟订单、佣金归因、事件推送.
+  outreach progress and per-creator results, read and reply to creator chats (TikTok Shop
+  站内信), collaboration status, free samples, creator videos and metrics, affiliate orders and
+  commission, change events and webhooks — 达人建联、发私信/定向邀约、建联进度、取消建联、
+  达人聊天/站内信收发、合作状态、寄样/申样、达人视频、联盟订单、佣金归因、事件推送.
   Runs via the bundled `boost` CLI (Python, zero install); use it even if the user never
   says "kaloboost".
 ---
@@ -15,8 +16,9 @@ description: >
 
 Kaloboost is the seller-side creator-outreach tool for TikTok Shop. This skill works on the
 Kaloboost data of the company that owns the API key: its bound shops, outreach, collaborations,
-samples, content, affiliate orders, events. Most commands read. The `[write]` commands send
-messages to real creators or change webhook settings — see "Writes" below before using them.
+chats with creators, samples, content, affiliate orders, events. Most commands read. The `[write]`
+commands send messages to real creators or change webhook settings — see "Writes" below before
+using them.
 
 ## Run
 
@@ -78,6 +80,14 @@ names what the account still needs) — another credential won't fix them.
 | `boost outreach create <creator_oecuid...>` | `[write]` send a DM / target invitation, content inline or from a template |
 | `boost outreach create-template` | `[write]` save a DM / invitation template in Kaloboost for reuse |
 | `boost outreach cancel <task_id>` | `[write]` stop what is not sent yet |
+| `boost chat list` | chat conversations with creators, unread counts; --status UNREAD\|UNREPLIED\|STARRED\|ARCHIVED |
+| `boost chat counts` | how many conversations are unread / unreplied / archived |
+| `boost chat open <creator_oecuid>` | get or start the conversation with a creator → `conversation_id` (sends nothing) |
+| `boost chat messages <conversation_id>` | a conversation's messages, sender role (CREATOR / MERCHANT / UNKNOWN) |
+| `boost chat upload-image <path>` | JPG/PNG/GIF/WebP (≤10 MB) → url, width, height for chat images |
+| `boost chat send <conversation_id>` | `[write]` reply: text, image, product card, text + image/products card, invitation or sample card |
+| `boost chat read <conversation_id...>` | mark conversations read (only when the user asks) |
+| `boost chat status <conversation_id>` | star / unstar / archive a conversation (only when the user asks) |
 | `boost collab list` | collaboration records: cooperate_status, outreach_result; --since |
 | `boost collab get <id>` | one collaboration record |
 | `boost sample list` | sample requests: status, product, commission, content counts; --since --status |
@@ -86,7 +96,7 @@ names what the account still needs) — another credential won't fix them.
 | `boost content list` / `get <id>` | creator videos/lives of a shop with metrics; --creator --published-from |
 | `boost order list` | affiliate orders by order time; --from --to (≤90 days) |
 | `boost attribution list` / `get <id>` | affiliate attribution per order line; --creator --order --since |
-| `boost event list` | change events (outreach, collab, sample); --types --since |
+| `boost event list` | change events (outreach, collab, sample, new chat message); --types --since |
 | `boost webhook list` | push endpoints for change events |
 | `boost webhook create\|update\|rotate-secret\|test\|replay` | `[write]` manage push endpoints |
 | `boost config` | show/set key (shared with kalo), default shop, endpoint |
@@ -149,6 +159,44 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
   work around it.
 - Sent messages and invitations can't be recalled; `outreach cancel` only stops unsent ones.
 
+## Chat with creators
+
+One-to-one TikTok Shop chat between the shop and a creator — replying to what a creator wrote,
+following up after an invitation or sample. (Bulk first contact is `outreach create`.)
+
+1. Find the conversation: `boost chat list --shop S --status UNREPLIED` (or `UNREAD`), or for a
+   given creator `boost chat open <creator_oecuid> --shop S` (resolve `@handle` first; opening
+   sends nothing). `creator_im_id` in the output is TikTok's chat id, not a `creator_oecuid`.
+2. Read before replying: `boost chat messages <conversation_id> --shop S`. `sender_role` is often
+   `UNKNOWN`; then a `sender_id` equal to the conversation's `creator_im_id` is the creator, any
+   other sender is the shop. Old messages don't have the same shape as what you send — build a
+   reply from the send flags, don't copy their content.
+3. Draft the reply, dry-run `boost chat send <conversation_id> --shop S ...`, show it, and only after
+   the user confirms rerun it with `--idempotency-key <key from the dry run> --yes`. The flags pick
+   the message type:
+   - `--text '...'` (≤2000 chars) — plain text
+   - `--image <url> --width W --height H` — url and size from `boost chat upload-image ./pic.png --shop S`
+   - `--product <id>` — one product card; `--text '...' --product <id>,<id>` — text with 1–5 products
+   - `--text '...' --image <url> [--title '...']` — text-with-image card (text ≤500, title ≤50)
+   - `--collab <channel_invite_id>` (from `boost collab get`) — the invitation card;
+     `--sample <channel_apply_id>` (from `boost sample get`) — the free-sample card. Not the local
+     `invite_id` / `sample_request_id`.
+4. `accepted=true` only means TikTok took it, not delivered or read.
+
+- New messages: `boost event list --shop S --types chat.message.created --since 1h` (or a webhook
+  with that type). Events hold no text — read it with `chat messages`. Events can be late or
+  missing: poll `chat list --status UNREAD` too.
+- Nothing marks a conversation read except `boost chat read`; reading or listing doesn't. Leave
+  conversations unread, and don't star / archive, unless the user asks — the merchant's team uses
+  those states in the Kaloboost inbox.
+- **Retrying a send**: if it fails with "may already have been sent" (`OUTCOME_UNKNOWN`) or a
+  network error, run `chat messages` first; if the message isn't there, rerun the identical command
+  with the same `--idempotency-key`. Only `NOT_SUBMITTED` is safe to rerun straight away. Never
+  resend with a new key — the creator would get it twice. Keys are kept 24h.
+- Chat writes (open, send, upload-image, read, status) share 1 call per second: one at a time.
+  `PLATFORM_REJECTED` is TikTok refusing (quota, risk control, content) — tell the user, don't resend.
+- `--operator` works as for outreach: leave it out unless the user asks to act as another member.
+
 ## Conventions
 
 - Shop-level commands need `--shop <shop_id>` from `boost shops` (or a saved default)
@@ -170,6 +218,8 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
 - Look up a creator: `boost creator resolve @handle --region US` → `boost creator get <creator_oecuid>`
 - Many creators (>100): `boost resolve-job create --file handles.txt --region US` → `boost resolve-job get <job_id>`
   until it finishes → `boost resolve-job results <job_id> --all`
+- Reply to creators: `boost chat list --shop S --status UNREPLIED` → `boost chat messages <id> --shop S`
+  → `boost chat send <id> --shop S --text '...'` (dry run → user confirms → `--idempotency-key <key> --yes`)
 - Get pushed instead of polling: `boost webhook create --url https://... --shop S` (dry run → `--yes`);
   store the one-time `secret`. Missed events: `boost webhook replay <endpoint_id> --from 24h`
 

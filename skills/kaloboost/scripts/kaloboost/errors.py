@@ -19,9 +19,11 @@ class BoostError(Exception):
     """Runtime failure (auth, access, upstream, network). Exit 1.
 
     kind: auth | access | parameter | network | api
+    submission: for chat writes, whether TikTok got it — NOT_SUBMITTED | OUTCOME_UNKNOWN | None
     """
 
     def __init__(self, message: str, kind: str = "api", help_lines: list[str] | None = None):
         super().__init__(message)
         self.kind = kind
         self.help_lines = help_lines or []
+        self.submission: str | None = None
