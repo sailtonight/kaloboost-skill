@@ -159,6 +159,29 @@ the hint gives (`--yes`, plus `--external-id` for `outreach create`). Never add 
   work around it.
 - Sent messages and invitations can't be recalled; `outreach cancel` only stops unsent ones.
 
+## Outreach playbook
+
+Defaults to propose, not rules: say what you plan, and follow the user whenever they choose otherwise.
+Ask for the business inputs (commission, sample policy, contact, which products) instead of picking numbers.
+
+- **Who**: this API can't search creators. Take handles from the user, or — when the user agrees —
+  from a creator-discovery tool such as the kalodata skill; then `creator resolve` them here.
+- **Exclude before sending**, and tell the user who was dropped and why:
+  creators with a sample in `UNFULFILLED`, or long in `CONTENT_PENDING` (`boost sample list --all`).
+  Invitations skip already-invited creators on their own; `--sync-dedup DAYS_30` does the same for
+  the DM. Past partners (`COOPERATED` in `boost collab list`) are worth inviting again, not excluding.
+- **Shape**: a target invitation (products, commission, free sample) with a short `--sync-dm`
+  converts better than a DM alone. Creators who fail with `TARGET_INVITATION_UNAVAILABLE_CREATOR`
+  can get a plain DM instead (`--card <product_id>` puts the product and its image in it) — offer
+  that rather than dropping them. Invitation text and the sync DM can't carry images.
+- **Copy**: one shared message for a batch. Write per-creator copy (one task each, after looking at
+  their content) only for a few high-value creators the user picks — it's slow at scale.
+- **Follow up**, where most replies come from — propose, never send unasked:
+  `boost chat list --status UNREPLIED` for creators waiting on an answer; invitations with no
+  response after a few days (`boost collab list`); samples shipped but no post (`CONTENT_PENDING`).
+- Don't resend the same text to the same creators in a short time; TikTok rate-limits and
+  flags repetitive outreach.
+
 ## Chat with creators
 
 One-to-one TikTok Shop chat between the shop and a creator — replying to what a creator wrote,
@@ -245,5 +268,6 @@ following up after an invitation or sample. (Bulk first contact is `outreach cre
 - **Outreach create** answers `Accepted` before anything is sent; target invitations skip creators
   already invited, so `total_count` can be below the number you sent.
 - **Stay inside this CLI.** For Kaloboost questions answer from what `boost` returns, scoped to the
-  key's own company. Don't go looking for Kaloboost databases, tables or web-console APIs, and
-  don't mix in data from other tools unless the user asks for it.
+  key's own company. Don't go looking for Kaloboost databases, tables or web-console APIs. Data
+  from other tools (e.g. kalodata for finding creators) only comes in when the user agrees to it,
+  and say which numbers came from where.
