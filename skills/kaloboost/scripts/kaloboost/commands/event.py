@@ -1,4 +1,4 @@
-"""`boost event` — change events of a shop (outreach tasks/recipients, collaborations, samples)."""
+"""`boost event` — change events of a shop (outreach tasks/recipients, collaborations, samples, chat messages)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ def _state(e: dict):
     for key in ("curr_status", "status", "cooperate_status", "send_status"):
         if d.get(key):
             return d[key]
+    if e.get("type") == "chat.message.created":
+        return f"{d.get('sender_role')} {d.get('msg_type')} in {d.get('conversation_id')}"
     return None
 
 
@@ -47,6 +49,8 @@ def events(cfg, opts, args):
     render.emit_table("events", display, ("occurred_at", "type", "resource_id", "version", "state", "event_id"))
     hints = [
         "Each event carries the full object at detection time (--json); several changes may be merged into one",
+        *(["chat.message.created has no text — read it with `boost chat messages <conversation_id> --shop <SHOP_ID>`"]
+          if any(e.get("type") == "chat.message.created" for e in rows) else []),
         "Dedupe by event_id; per resource, ignore events with a lower version",
         *poll,
     ]

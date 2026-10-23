@@ -1,10 +1,10 @@
 # kaloboost-skill
 
-Agent skill for [Kaloboost](https://www.kaloboost.com) — a TikTok Shop seller's creator outreach: bound shops, creator lookup, sending and canceling TikTok DMs / target invitations, per-creator results, collaborations, free samples and the content posted for them, affiliate orders and attribution, change events and webhooks.
+Agent skill for [Kaloboost](https://www.kaloboost.com) — a TikTok Shop seller's creator outreach: bound shops, creator lookup, sending and canceling TikTok DMs / target invitations, per-creator results, chatting with creators, collaborations, free samples and the content posted for them, affiliate orders and attribution, change events and webhooks.
 
 The skill bundles a zero-dependency CLI (`boost`, Python 3.11+ stdlib only). Installing the skill is all it takes: the agent runs the CLI straight from the skill directory. It covers every endpoint of the Kaloboost OpenAPI v1.
 
-Write commands (`outreach create/create-template/cancel`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
+Write commands (`outreach create/create-template/cancel`, `chat send`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
 
 ## Install
 
@@ -65,6 +65,9 @@ Output is token-efficient TOON; add `--json` for raw JSON. Lists are cursor-page
 | `boost outreach products` / `upload-image` | Products usable in DMs / invitations, image upload for DM images |
 | `boost outreach create` / `cancel` | Send a DM / target invitation (content inline or from a template), stop unsent parts (`--yes`) |
 | `boost outreach create-template` | Save a DM / invitation template in Kaloboost (`--yes`) |
+| `boost chat list` / `counts` / `open` / `messages` | Creator chat conversations, unread counts, message history |
+| `boost chat send` / `upload-image` | Reply with text, image, product / invitation / sample cards (`--yes` to send) |
+| `boost chat read` / `status` | Mark conversations read, star / unstar / archive |
 | `boost collab list` / `get` | Collaboration records |
 | `boost sample list` / `get` / `contents` | Sample requests, fulfillment, posted videos/lives |
 | `boost content list` / `get` | Creator videos/lives of a shop with metrics |
@@ -141,12 +144,14 @@ Tools return raw JSON under `data`, matching the CLI's `--json` mode; `json` and
 (local file input) are not exposed. Lists return `next_cursor`; pass it back as `cursor`,
 or set `all: true`.
 
-Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`,
+Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`, `chat_send`,
 `webhook_create/update/rotate_secret/test/replay`) send nothing without `yes: true`: they return
 a `dry_run` preview plus a `next` hint naming the `idempotency_key` (or `external_id` for
 `outreach_create`) to pass along when the user confirms, so a retried call runs at most once.
 `outreach_create_template` has no key: a retry after a timeout can leave a duplicate template.
 `outreach_upload_image` reads a local JPG/PNG (anything else is refused before upload).
+`chat_upload_image` (JPG/PNG/GIF/WebP), `chat_open`, `chat_read` and `chat_status` act at once —
+they send nothing to the creator, and take an `idempotency_key` for safe retries.
 
 To run the server manually from a checkout:
 

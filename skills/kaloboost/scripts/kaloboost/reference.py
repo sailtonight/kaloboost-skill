@@ -15,7 +15,7 @@ from .config import DEFAULT_BASE_URL, Config
 
 DESCRIPTION = (
     "Kaloboost creator outreach for TikTok Shop sellers — shops, creator lookup, outreach tasks "
-    "(read, send, cancel), collaborations, samples, content, affiliate orders, change events, webhooks"
+    "(read, send, cancel), creator chat, collaborations, samples, content, affiliate orders, change events, webhooks"
 )
 
 # (command, what) — the `what` column is deliberately terse; details live in --help
@@ -35,6 +35,14 @@ COMMAND_TABLE = [
     ("boost outreach create <creator_oecuid...>", "send a DM / target invitation, content inline or template [write, --yes]"),
     ("boost outreach create-template", "save a DM / invitation template in Kaloboost [write, --yes]"),
     ("boost outreach cancel <task_id>", "stop what is not sent yet [write, --yes]"),
+    ("boost chat list", "chat conversations with creators, unread counts; --status UNREAD|UNREPLIED|…"),
+    ("boost chat messages <conversation_id>", "messages of a conversation, sender role"),
+    ("boost chat open <creator_oecuid>", "get or start the conversation with a creator → conversation_id"),
+    ("boost chat send <conversation_id>", "reply: text, image, product / invitation / sample card [write, --yes]"),
+    ("boost chat upload-image <path>", "JPG/PNG/GIF/WebP → url, width, height for chat images"),
+    ("boost chat read <conversation_id...>", "mark conversations read (1-20); acts at once, no --yes"),
+    ("boost chat status <conversation_id> --action", "star / unstar / archive; acts at once, no --yes"),
+    ("boost chat counts", "unread / unreplied / archived conversation counts"),
     ("boost collab list", "collaboration records: cooperate_status, outreach_result; --since"),
     ("boost collab get <id>", "one collaboration record"),
     ("boost sample list", "sample requests: status, product, commission, content counts; --since --status"),
@@ -45,7 +53,7 @@ COMMAND_TABLE = [
     ("boost order list", "affiliate orders by order time; --from --to (≤90 days)"),
     ("boost attribution list", "affiliate attribution per order line; --creator --order --since"),
     ("boost attribution get <id>", "one attribution record: amounts, settlement"),
-    ("boost event list", "change events (outreach, collab, sample); --types --since"),
+    ("boost event list", "change events (outreach, collab, sample, chat message); --types --since"),
     ("boost webhook list", "push endpoints for change events"),
     ("boost webhook create|update|rotate-secret|test|replay", "manage push endpoints [write, --yes]"),
     ("boost config", "show/set key (shared with kalo), default shop, endpoint"),

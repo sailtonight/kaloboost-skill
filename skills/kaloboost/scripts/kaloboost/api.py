@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 from . import __version__
 from .config import Config
@@ -96,6 +97,29 @@ def _unwrap(body: dict) -> dict:
     return body
 
 
+def _submission(err: dict) -> str | None:
+    """Chat writes say whether TikTok got the request: NOT_SUBMITTED / OUTCOME_UNKNOWN."""
+    for d in err.get("details") or []:
+        if isinstance(d, dict) and d.get("field") == "submission":
+            return d.get("reason")
+    return None
+
+
+def multipart(fields: dict[str, str], file_field: str, file_name: str, data: bytes, content_type: str) -> tuple[bytes, str]:
+    """-> (body, Content-Type header) for one file plus plain form fields."""
+    boundary = "boost-" + uuid.uuid4().hex
+    parts = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    safe = file_name.replace('"', "_").replace("\r", "_").replace("\n", "_")
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{safe}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n".encode() + data + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
 def _reason(err: dict) -> tuple[str | None, str | None]:
     details = err.get("details") or []
     first = details[0] if details and isinstance(details[0], dict) else {}
@@ -172,7 +196,25 @@ def _not_eligible(text: str, err: dict) -> BoostError:
     return BoostError(text, kind="auth", help_lines=["The account behind this key is not eligible for Kaloboost OpenAPI yet"])
 
 
+_SUBMISSION_HINTS = {
+    "NOT_SUBMITTED": "Not sent to TikTok — once the cause is fixed, rerun the identical command with the same "
+    "--idempotency-key",
+    "OUTCOME_UNKNOWN": "It may already have been sent — don't retry; check `boost chat messages <conversation_id>` "
+    "first, and never rerun it with a new --idempotency-key",
+}
+
+
 def _translate(status: int, err: dict, request_id: str | None, retry_after: float | None = None) -> BoostError:
+    e = _translate_code(status, err, request_id, retry_after)
+    e.submission = _submission(err)
+    hint = _SUBMISSION_HINTS.get(e.submission)
+    if hint:
+        # OUTCOME_UNKNOWN overrides generic "retry shortly" advice: the message may be out already
+        e.help_lines = [hint] if e.submission == "OUTCOME_UNKNOWN" else [hint, *e.help_lines]
+    return e
+
+
+def _translate_code(status: int, err: dict, request_id: str | None, retry_after: float | None = None) -> BoostError:
     code = str(err.get("code") or f"HTTP_{status}")
     message = str(err.get("message") or "").strip()
     field, reason = _reason(err)
@@ -195,6 +237,11 @@ def _translate(status: int, err: dict, request_id: str | None, retry_after: floa
         return BoostError(
             text, kind="parameter",
             help_lines=["Check the id; shop data ids only exist within their own --shop, creator ids within their --region"],
+        )
+    if code == "PLATFORM_REJECTED":
+        return BoostError(
+            text, kind="parameter",
+            help_lines=["TikTok refused it (quota, risk control or content) — don't resend the same thing; tell the user"],
         )
     if code == "CURSOR_EXPIRED" or reason == "CURSOR_INVALID":
         return BoostError(text, kind="parameter", help_lines=[_CURSOR_HELP])
@@ -271,6 +318,7 @@ def request(
     *,
     params: dict | None = None,
     body: dict | None = None,
+    raw_body: tuple[bytes, str] | None = None,
     headers: dict | None = None,
     timeout: float = 30.0,
     retry: bool = True,
@@ -280,7 +328,9 @@ def request(
     Retries (network errors, 429, 5xx) resend the identical request, so write
     calls must carry their Idempotency-Key in `headers`. Writes that can't
     (template creation) pass retry=False: only a 429, which was never
-    processed, is retried then.
+    processed, is retried then. `raw_body` is (bytes, Content-Type), for multipart
+    uploads. A chat write whose error says `submission: OUTCOME_UNKNOWN` is never
+    retried — it may have reached TikTok.
     """
     _require_auth(cfg)
     url = cfg.base_url.rstrip("/") + path
@@ -290,6 +340,8 @@ def request(
             url += "?" + urllib.parse.urlencode(query)
     payload = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {**_headers(cfg, payload is not None), **(headers or {})}
+    if raw_body is not None:
+        payload, headers["Content-Type"] = raw_body
 
     last = "unknown error"
     for attempt in range(_RETRIES):
@@ -310,6 +362,10 @@ def request(
                     err = parsed if "code" in parsed else {"message": str(err or "")}
                 rid = parsed.get("request_id")
             code = err.get("code")
+            submission = _submission(err)
+            # never resend what may have reached TikTok; on the last try keep what the server said
+            if submission == "OUTCOME_UNKNOWN" or (submission and attempt == _RETRIES - 1):
+                raise _translate(status, err, rid)
             if status == 429:
                 wait = _retry_after(resp_headers)
                 if wait <= _MAX_RETRY_AFTER:

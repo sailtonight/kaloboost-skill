@@ -21,7 +21,11 @@ class MockBoost(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        self._respond(json.loads(self.rfile.read(length)) if length else None)
+        raw = self.rfile.read(length) if length else b""
+        if self.headers.get("Content-Type", "").startswith("multipart/"):
+            self._respond(raw)  # uploads: tests inspect the raw bytes
+        else:
+            self._respond(json.loads(raw) if raw else None)
 
     do_PATCH = do_POST
 

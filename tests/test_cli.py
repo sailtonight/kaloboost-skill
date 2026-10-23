@@ -689,3 +689,169 @@ def test_creator_changes(capsys, env):
     assert code == 0
     assert env.requests[0][2]["shop_region"] == "US"
     assert "identity.handle metrics.follower_count" in out
+
+
+# --- chat ------------------------------------------------------------------------
+
+def test_chat_list_caps_limit_and_repeats_filters(capsys, env):
+    env.responses["/chat/conversations"] = page(
+        [{"conversation_id": "c1", "username": "amy", "unread_count": 2, "creator_im_id": "im1"}], cursor="n2",
+    )
+    code, out = run(capsys, "chat", "--shop", "s", "--status", "UNREAD", "--limit", "50")
+    assert code == 0
+    assert env.requests[0][2] == {"shop_id": "s", "conversation_status": "UNREAD", "limit": "50"}
+    assert "boost chat list --shop s --status UNREAD --limit 50 --cursor n2" in out
+    code, out = run(capsys, "chat", "list", "--shop", "s", "--limit", "51")
+    assert code == 2 and "--limit must be 1-50" in out
+
+
+def test_chat_messages_render_text_and_cards(capsys, env):
+    env.responses["/chat/conversations/c%2F1/messages"] = page([
+        {"message_id": "m1", "sender_role": "CREATOR", "msg_type": "TEXT", "content": {"content": "Hi!"},
+         "created_at": "2026-10-22T00:00:00Z"},
+        {"message_id": "m2", "sender_role": "MERCHANT", "msg_type": "PRODUCT_CARD", "content": {"product_id": "9"}},
+        {"message_id": "m3", "sender_role": "UNKNOWN", "msg_type": "SYSTEM", "content": None, "content_raw": "raw"},
+    ])
+    code, out = run(capsys, "chat", "messages", "c/1", "--shop", "s", "--limit", "30")
+    assert code == 2 and "1-20" in out
+    code, out = run(capsys, "chat", "messages", "c/1", "--shop", "s")
+    assert code == 0
+    assert env.requests[-1][1] == "/chat/conversations/c%2F1/messages"
+    assert "Hi!" in out and "[product] 9" in out and "raw" in out
+
+
+def test_chat_send_is_dry_run_until_yes(capsys, env):
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hello")
+    assert code == 0 and "dry_run" in out and env.requests == []
+    code, _ = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hello", "--idempotency-key", "k1", "--yes")
+    assert code == 0
+    method, path, _, headers, body = env.requests[0]
+    assert (method, path) == ("POST", "/chat/conversations/c1/messages")
+    assert headers["idempotency-key"] == "k1"
+    assert body == {"shop_id": "s", "msg_type": "TEXT", "content": {"content": "Hello"}}
+
+
+def _sent(capsys, env, *flags):
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", *flags, "--json")
+    assert code == 0, out
+    return json.loads(out)["dry_run"]["body"]
+
+
+def test_chat_send_picks_msg_type_from_flags(capsys, env):
+    assert _sent(capsys, env, "--image", "https://x/a.png", "--width", "8", "--height", "6") == {
+        "shop_id": "s", "msg_type": "IMAGE", "content": {"url": "https://x/a.png", "width": 8, "height": 6}}
+    assert _sent(capsys, env, "--product", "11")["msg_type"] == "PRODUCT_CARD"
+    body = _sent(capsys, env, "--text", "Look", "--product", "11,12", "--title", "Picks")
+    assert body["msg_type"] == "CRM_TEXT_WITH_PRODUCTS_CARD"
+    assert body["content"] == {"product_ids": "11,12", "content": "Look", "title": "Picks"}
+    body = _sent(capsys, env, "--text", "See", "--image", "https://x/a.png")
+    assert body["content"] == {"image_url": "https://x/a.png", "content": "See"}
+    assert _sent(capsys, env, "--collab", "77")["content"] == {"target_collaboration_id": "77"}
+    assert _sent(capsys, env, "--sample", "88", "--operator", "a@b.com") == {
+        "shop_id": "s", "msg_type": "FREE_SAMPLE_CARD", "content": {"apply_id": "88"}, "operator_account": "a@b.com"}
+    assert env.requests == []
+
+
+def test_chat_send_validates_locally(capsys, env):
+    cases = [
+        ((), "nothing to send"),
+        (("--image", "u"), "--width and --height"),
+        (("--text", "x" * 2001), "at most 2000"),
+        (("--text", "x" * 501, "--product", "1"), "at most 500"),
+        (("--text", "x", "--product", "1,2,3,4,5,6"), "1-5 products"),
+        (("--product", "1,2"), "one --product"),
+        (("--product", "abc"), "must be TikTok product ids"),
+        (("--collab", "1", "--text", "x"), "card of its own"),
+        (("--text", "x", "--title", "t"), "--title only"),
+        (("--text", "x", "--image", "u", "--product", "1"), "not both"),
+    ]
+    for flags, msg in cases:
+        code, out = run(capsys, "chat", "send", "c1", "--shop", "s", *flags)
+        assert code == 2 and msg in out, (flags, out)
+    assert env.requests == []
+
+
+def test_chat_send_outcome_unknown_is_not_retried(capsys, env):
+    env.responses["/chat/conversations/c1/messages"] = err(
+        503, "UPSTREAM_UNAVAILABLE", "submission", "OUTCOME_UNKNOWN")
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hi", "--yes")
+    assert code == 1
+    assert len(env.requests) == 1
+    assert "may already have been sent" in out
+    assert "retry the identical command" not in out
+    assert "retry shortly" not in out
+
+
+def test_chat_send_not_submitted_exhausted_keeps_verdict(capsys, env):
+    env.responses["/chat/conversations/c1/messages"] = err(
+        503, "UPSTREAM_UNAVAILABLE", "submission", "NOT_SUBMITTED")
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hi", "--idempotency-key", "k", "--yes")
+    assert code == 1
+    assert len(env.requests) == 3
+    assert "Not sent to TikTok" in out
+    assert "may have been sent" not in out and "unreachable" not in out
+
+
+def test_chat_send_not_submitted_is_retried_with_same_key(capsys, env):
+    env.responses["/chat/conversations/c1/messages"] = [
+        err(503, "UPSTREAM_UNAVAILABLE", "submission", "NOT_SUBMITTED"),
+        {"data": {"accepted": True, "conversation_id": "c1", "msg_type": "TEXT", "message_id": None}},
+    ]
+    code, out = run(capsys, "chat", "send", "c1", "--shop", "s", "--text", "Hi", "--yes")
+    assert code == 0 and "accepted" in out
+    keys = {r[3]["idempotency-key"] for r in env.requests}
+    assert len(env.requests) == 2 and len(keys) == 1
+
+
+def test_chat_open_and_read(capsys, env):
+    env.responses["/chat/conversations"] = {"data": {"conversation_id": "c9", "is_new": True}}
+    code, out = run(capsys, "chat", "open", "oec1", "--shop", "s")
+    assert code == 0 and "boost chat messages c9" in out
+    assert env.requests[0][4] == {"shop_id": "s", "creator_oecuid": "oec1"}
+    assert env.requests[0][3]["idempotency-key"]
+    env.responses["/chat/conversations:markRead"] = {"data": {"failed_conversation_ids": ["c2"]}}
+    code, out = run(capsys, "chat", "read", "c1", "c2", "--shop", "s")
+    assert code == 0 and "marked_read: 1 of 2" in out and "failed[1]: c2" in out
+    assert env.requests[1][4] == {"shop_id": "s", "conversation_ids": ["c1", "c2"]}
+    code, out = run(capsys, "chat", "read", "c1", "c1", "--shop", "s")
+    assert code == 2
+
+
+def test_chat_status(capsys, env):
+    env.responses["/chat/conversations/c1/status"] = {"data": {"conversation_id": "c1", "action": "ARCHIVED"}}
+    code, _ = run(capsys, "chat", "status", "c1", "--shop", "s", "--action", "ARCHIVED")
+    assert code == 0
+    assert env.requests[0][4] == {"shop_id": "s", "action": "ARCHIVED"}
+    code, out = run(capsys, "chat", "status", "c1", "--shop", "s")
+    assert code == 2 and "--action is required" in out
+
+
+def test_chat_upload_image_is_multipart(capsys, env, tmp_path):
+    img = tmp_path / "a.webp"
+    img.write_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 data")
+    env.responses["/chat/images"] = {"data": {"url": "https://img/x.webp", "width": 10, "height": 20}}
+    code, out = run(capsys, "chat", "upload-image", str(img), "--shop", "s", "--operator", "a@b.com")
+    assert code == 0
+    assert "--image 'https://img/x.webp' --width 10 --height 20" in out
+    _, path, _, headers, body = env.requests[0]
+    assert path == "/chat/images"
+    assert headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert headers["idempotency-key"]
+    assert b'name="shop_id"\r\n\r\ns\r\n' in body
+    assert b'name="operator_account"\r\n\r\na@b.com\r\n' in body
+    assert b'filename="a.webp"\r\nContent-Type: image/webp\r\n\r\nRIFF' in body
+    bad = tmp_path / "a.txt"
+    bad.write_text("nope")
+    code, out = run(capsys, "chat", "upload-image", str(bad), "--shop", "s")
+    assert code == 2 and "not a JPG, PNG, GIF or WebP" in out
+
+
+def test_event_list_explains_chat_events(capsys, env):
+    env.responses["/events"] = page([{
+        "event_id": "e1", "type": "chat.message.created", "resource_id": "opaque",
+        "data": {"conversation_id": "c1", "sender_role": "CREATOR", "msg_type": "TEXT"},
+    }])
+    code, out = run(capsys, "event", "list", "--shop", "s", "--types", "chat.message.created")
+    assert code == 0
+    assert "CREATOR TEXT in c1" in out
+    assert "boost chat messages" in out
