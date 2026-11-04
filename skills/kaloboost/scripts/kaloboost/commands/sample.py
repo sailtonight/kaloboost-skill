@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import urllib.parse
+import uuid
 
 from .. import api, render
 from ..core import Command, Flag
+from ..errors import UsageError
 from . import common
 
 FIELDS = (
@@ -126,6 +128,52 @@ def contents(cfg, opts, args):
     return 0
 
 
+REJECT_REASONS = ("NOT_MATCH", "OFFLINE", "OUT_OF_STOCK", "OTHER")
+
+
+def review(cfg, opts, args):
+    shop = common.shop(cfg, opts)
+    sid = args[0]
+    decision = opts.get("decision")
+    reason = opts.get("reject_reason")
+    if not decision:
+        raise UsageError("--decision is required", ["--decision APPROVE, or --decision REJECT --reject-reason <REASON>"])
+    if decision == "REJECT" and not reason:
+        raise UsageError(
+            "--decision REJECT needs --reject-reason",
+            [f"Pick one of {', '.join(REJECT_REASONS)} — TikTok takes no free text; ask the user which applies"],
+        )
+    if decision == "APPROVE" and reason:
+        raise UsageError("--reject-reason only goes with --decision REJECT", ["Drop --reject-reason to approve"])
+    body = {"decision": decision}
+    if reason:
+        body["reject_reason"] = reason
+    key = opts.get("idempotency_key") or str(uuid.uuid4())
+    env = common.send(cfg, opts, "POST", f"/samples/{_q(sid)}/review", params={"shop_id": shop}, body=body,
+                      key=key, confirm_flags=f"--idempotency-key {key} --yes", timeout=40.0)
+    if env is None:
+        return 0
+    data = env.get("data") or {}
+    if opts.get("json"):
+        common.dump_json(data)
+        return 0
+    render.emit_detail("sample_review", data)
+    platform = data.get("platform") or {}
+    hints = []
+    if data.get("replayed"):
+        hints.append("replayed=true: TikTok was not called again — this decision was already in effect")
+    if not platform.get("observed"):
+        hints.append("platform.observed=false: the new TikTok state was not read back — that is not a failure; "
+                     f"check later with `boost sample get {sid} --shop {shop}`")
+    elif decision == "APPROVE" and not platform.get("channel_main_order_id"):
+        hints.append("No sample order id yet — TikTok creates it within about a minute after approval")
+    if platform.get("channel_main_order_id"):
+        hints.append("Keep channel_main_order_id from this answer: `boost sample get` shows it only hours to a day later")
+    hints.append("A review submitted to TikTok can't be withdrawn")
+    render.emit_help(hints)
+    return 0
+
+
 STATUSES = (
     "APPLY_TO_REVIEW", "READY_TO_SHIP", "SHIPPED", "CONTENT_PENDING", "COMPLETED",
     "REJECTED", "EXPIRED", "UNFULFILLED", "CANCELED", "UNMAPPED",
@@ -166,5 +214,25 @@ COMMANDS = [
         pos_min=1,
         pos_max=1,
         examples=["boost sample contents <SAMPLE_ID> --shop <SHOP_ID>"],
+    ),
+    Command(
+        path="sample review",
+        summary="[write] Approve or reject a creator's sample application on TikTok (PENDING only; can't be undone)",
+        handler=review,
+        flags=[
+            common.shop_flag(),
+            Flag("--decision", "APPROVE or REJECT", choices=("APPROVE", "REJECT"), metavar="DECISION"),
+            Flag("--reject-reason", "required with REJECT: TikTok's reason code, no free text",
+                 choices=REJECT_REASONS, metavar="REASON"),
+            common.key_flag(),
+            common.yes_flag(),
+        ],
+        positional="sample_request_id",
+        pos_min=1,
+        pos_max=1,
+        examples=[
+            "boost sample review <SAMPLE_ID> --shop <SHOP_ID> --decision APPROVE",
+            "boost sample review <SAMPLE_ID> --shop <SHOP_ID> --decision REJECT --reject-reason OUT_OF_STOCK",
+        ],
     ),
 ]

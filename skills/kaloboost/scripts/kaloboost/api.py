@@ -151,6 +151,15 @@ _CHANNEL_HINTS = {
     "UNSUPPORTED": "Use --method TIKTOK_DM or TIKTOK_TARGET_COLLABORATION",
     "PRODUCTS_UNAVAILABLE": "The shop can't list products for this channel now — send a text-only DM, or ask the merchant "
     "to check the shop's authorization in Kaloboost",
+    "REGION_NOT_SUPPORTED": "This shop's market is not supported for this API — the merchant handles it in TikTok Seller "
+    "Center; don't retry",
+    "SCOPE_MISSING": "The shop's TikTok Open API authorization lacks a permission — ask the merchant to re-authorize it "
+    "in Kaloboost; don't retry",
+    "NO_CHANNEL_APPLY_ID": "This sample record has no TikTok application id — it can only be handled in TikTok Seller Center",
+    "AGENCY_APPLICATION": "An agency applied on the creator's behalf — sellers can't review those through the API; "
+    "handle it in TikTok Seller Center",
+    "NOT_APPROVABLE": "TikTok won't let this application be approved (e.g. sample stock quota used up) — reject it "
+    "or top up stock; tell the user",
     "IMAGE_REQUIRES_COOKIE": "Images need the merchant to re-authorize the shop in the Kaloboost console — send text only "
     "for now; never ask the user for cookies or tokens",
 }
@@ -239,10 +248,24 @@ def _translate_code(status: int, err: dict, request_id: str | None, retry_after:
             help_lines=["Check the id; shop data ids only exist within their own --shop, creator ids within their --region"],
         )
     if code == "PLATFORM_REJECTED":
-        return BoostError(
-            text, kind="parameter",
-            help_lines=["TikTok refused it (quota, risk control or content) — don't resend the same thing; tell the user"],
-        )
+        lines = ["TikTok refused it (quota, risk control or content) — don't resend the same thing; tell the user"]
+        if field == "channel_code":
+            lines.append("For a sample review: if this follows a timeout / 503, it may have taken effect — "
+                         "check `boost sample get <id> --shop <SHOP_ID>` before anything else")
+        return BoostError(text, kind="parameter", help_lines=lines)
+    if code == "SAMPLE_NOT_REVIEWABLE":
+        details = err.get("details") or []
+        state = next((d.get("reason") for d in details[1:] if isinstance(d, dict) and d.get("field") == "platform_status"),
+                     None)
+        if reason == "CHANNEL_RECORD_NOT_FOUND":
+            hint = "TikTok has no such application any more — check the id; trust `boost sample get`"
+        elif state:
+            hint = f"Not pending on TikTok any more (now {state}) — someone already handled it; don't retry with a new key"
+        else:
+            hint = ("Not pending on TikTok any more, current state unknown — if this follows a timeout / 503 your "
+                    "decision may already be in effect: check `boost sample get <id> --shop <SHOP_ID>` in a minute; "
+                    "don't retry with a new key")
+        return BoostError(text, kind="parameter", help_lines=[hint])
     if code == "CURSOR_EXPIRED" or reason == "CURSOR_INVALID":
         return BoostError(text, kind="parameter", help_lines=[_CURSOR_HELP])
     if code == "INVALID_ARGUMENT" and reason == "NOT_FOUND" and str(field).startswith("recipients"):

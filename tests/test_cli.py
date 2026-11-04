@@ -855,3 +855,84 @@ def test_event_list_explains_chat_events(capsys, env):
     assert code == 0
     assert "CREATOR TEXT in c1" in out
     assert "boost chat messages" in out
+
+
+# --- sample review ------------------------------------------------------------
+
+def test_sample_review_is_dry_run_until_yes(capsys, env):
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE")
+    assert code == 0 and out.startswith("dry_run:") and env.requests == []
+    key = next(l.split(": ", 1)[1] for l in out.splitlines() if l.strip().startswith("idempotency_key:"))
+    assert f"--idempotency-key {key} --yes" in out
+    env.responses["/samples/sr1/review"] = {"data": {
+        "review_id": "rv1", "sample_request_id": "sr1", "shop_id": "s", "decision": "APPROVE",
+        "replayed": False, "platform": {"observed": True, "status": "AWAITING_SHIPMENT",
+                                        "curr_status": "READY_TO_SHIP", "channel_main_order_id": "o1"},
+    }}
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE",
+                    "--idempotency-key", "k1", "--yes")
+    assert code == 0, out
+    method, path, query, headers, body = env.requests[0]
+    assert (method, path, query, body) == ("POST", "/samples/sr1/review", {"shop_id": "s"}, {"decision": "APPROVE"})
+    assert headers["idempotency-key"] == "k1"
+    assert "READY_TO_SHIP" in out and "Keep channel_main_order_id" in out
+
+
+def test_sample_review_reject_needs_reason(capsys, env):
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "REJECT", "--yes")
+    assert code == 2 and "--reject-reason" in out and env.requests == []
+    code, _ = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE",
+                  "--reject-reason", "OTHER", "--yes")
+    assert code == 2 and env.requests == []
+    code, _ = run(capsys, "sample", "review", "sr1", "--shop", "s", "--yes")
+    assert code == 2 and env.requests == []
+    code, _ = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "REJECT",
+                  "--reject-reason", "too expensive", "--yes")
+    assert code == 2 and env.requests == []
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "REJECT",
+                    "--reject-reason", "OUT_OF_STOCK", "--json")
+    assert json.loads(out)["dry_run"]["body"] == {"decision": "REJECT", "reject_reason": "OUT_OF_STOCK"}
+
+
+def test_sample_review_unobserved_is_not_failure(capsys, env):
+    env.responses["/samples/sr1/review"] = {"data": {"sample_request_id": "sr1", "decision": "REJECT",
+                                                     "replayed": True, "platform": {"observed": False}}}
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "REJECT",
+                    "--reject-reason", "NOT_MATCH", "--yes")
+    assert code == 0
+    assert "not a failure" in out and "replayed=true" in out
+
+
+def test_sample_review_503_keeps_key(capsys, env):
+    env.responses["/samples/sr1/review"] = err(503, "UPSTREAM_UNAVAILABLE")
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE",
+                    "--idempotency-key", "k9", "--yes")
+    assert code == 1
+    assert {r[3]["idempotency-key"] for r in env.requests} == {"k9"}
+    assert "--idempotency-key k9" in out
+
+
+def test_sample_review_not_reviewable_hints(capsys, env):
+    env.responses["/samples/sr1/review"] = err(409, "SAMPLE_NOT_REVIEWABLE", details=[
+        {"field": "sample_request_id", "reason": "NOT_PENDING"},
+        {"field": "platform_status", "reason": "REJECT_CANCELLED"},
+    ])
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "now REJECT_CANCELLED" in out and len(env.requests) == 1
+    env.responses["/samples/sr1/review"] = err(409, "SAMPLE_NOT_REVIEWABLE", "sample_request_id", "NOT_PENDING")
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "may already be in effect" in out
+    env.responses["/samples/sr1/review"] = err(422, "CHANNEL_NOT_AVAILABLE", "sample_request_id", "AGENCY_APPLICATION")
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "Seller Center" in out
+
+
+def test_creator_batch_get_shows_level(capsys, env):
+    env.responses["/creators:batchGet"] = {"data": {"results": [
+        {"creator_oecuid": "c1", "status": "FOUND", "creator": {
+            "creator_oecuid": "c1", "identity": {"handle": "demo"},
+            "profile": {"nickname": "Demo", "creator_level": 3}, "metrics": {}}},
+    ]}}
+    code, out = run(capsys, "creator", "get", "c1", "c2", "--region", "JP")
+    assert code == 0, out
+    assert "level" in out.splitlines()[0] and ",3," in out

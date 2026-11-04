@@ -1,10 +1,10 @@
 # kaloboost-skill
 
-Agent skill for [Kaloboost](https://www.kaloboost.com) — a TikTok Shop seller's creator outreach: bound shops, creator lookup, sending and canceling TikTok DMs / target invitations, per-creator results, chatting with creators, collaborations, free samples and the content posted for them, affiliate orders and attribution, change events and webhooks.
+Agent skill for [Kaloboost](https://www.kaloboost.com) — a TikTok Shop seller's creator outreach: bound shops, creator lookup, sending and canceling TikTok DMs / target invitations, per-creator results, chatting with creators, collaborations, free samples (including approving / rejecting sample applications) and the content posted for them, affiliate orders and attribution, change events and webhooks.
 
 The skill bundles a zero-dependency CLI (`boost`, Python 3.11+ stdlib only). Installing the skill is all it takes: the agent runs the CLI straight from the skill directory. It covers every endpoint of the Kaloboost OpenAPI v1.
 
-Write commands (`outreach create/create-template/cancel`, `chat send`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
+Write commands (`outreach create/create-template/cancel`, `chat send`, `sample review`, `webhook create/update/rotate-secret/test/replay`) only print the request until you add `--yes`.
 
 ## Install
 
@@ -70,6 +70,7 @@ Output is token-efficient TOON; add `--json` for raw JSON. Lists are cursor-page
 | `boost chat read` / `status` | Mark conversations read, star / unstar / archive |
 | `boost collab list` / `get` | Collaboration records |
 | `boost sample list` / `get` / `contents` | Sample requests, fulfillment, posted videos/lives |
+| `boost sample review` | Approve / reject a pending sample application on TikTok (`--yes`) |
 | `boost content list` / `get` | Creator videos/lives of a shop with metrics |
 | `boost order list` | Affiliate orders by order time (≤90-day window) |
 | `boost attribution list` / `get` | Affiliate attribution per order line |
@@ -144,7 +145,7 @@ Tools return raw JSON under `data`, matching the CLI's `--json` mode; `json` and
 (local file input) are not exposed. Lists return `next_cursor`; pass it back as `cursor`,
 or set `all: true`.
 
-Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`, `chat_send`,
+Write tools (`outreach_create`, `outreach_create_template`, `outreach_cancel`, `chat_send`, `sample_review`,
 `webhook_create/update/rotate_secret/test/replay`) send nothing without `yes: true`: they return
 a `dry_run` preview plus a `next` hint naming the `idempotency_key` (or `external_id` for
 `outreach_create`) to pass along when the user confirms, so a retried call runs at most once.

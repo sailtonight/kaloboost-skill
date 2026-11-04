@@ -59,7 +59,8 @@ def shops(cfg, opts, args):
     hints = [
         "Pass a shop_id as --shop to outreach / collab / sample / order / event commands",
         "Save a default: `boost config set --shop <SHOP_ID>`",
-        "AFFILIATE_ATTRIBUTION missing on a US/ID/TH/MY/VN/PH/SG shop = TikTok Shop Open API not authorized in Kaloboost",
+        "AFFILIATE_ATTRIBUTION / SAMPLE_REVIEW missing on a US/ID/TH/MY/VN/PH/SG/JP shop = TikTok Shop Open API not "
+        "authorized in Kaloboost",
     ]
     render.emit_help(common.page_hints(rows, cursor, pages, "boost shops", opts, hints))
     return 0

@@ -5,9 +5,10 @@ description: >
   user's Kaloboost account: DM or invite creators (content, shop products, images inline) and
   cancel outreach, look up creators by handle (email, followers, GMV), save templates, track
   outreach progress and per-creator results, read and reply to creator chats (TikTok Shop
-  站内信), collaboration status, free samples, creator videos and metrics, affiliate orders and
+  站内信), collaboration status, free samples and approving / rejecting sample applications,
+  creator videos and metrics, affiliate orders and
   commission, change events and webhooks — 达人建联、发私信/定向邀约、建联进度、取消建联、
-  达人聊天/站内信收发、合作状态、寄样/申样、达人视频、联盟订单、佣金归因、事件推送.
+  达人聊天/站内信收发、合作状态、寄样/申样、审核申样、达人视频、联盟订单、佣金归因、事件推送.
   Runs via the bundled `boost` CLI (Python, zero install); use it even if the user never
   says "kaloboost".
 ---
@@ -17,7 +18,8 @@ description: >
 Kaloboost is the seller-side creator-outreach tool for TikTok Shop. This skill works on the
 Kaloboost data of the company that owns the API key: its bound shops, outreach, collaborations,
 chats with creators, samples, content, affiliate orders, events. Most commands read. The `[write]`
-commands send messages to real creators or change webhook settings — see "Writes" below before
+commands send messages to real creators, approve / reject their sample applications, or change
+webhook settings — see "Writes" below before
 using them.
 
 ## Run
@@ -68,7 +70,7 @@ names what the account still needs) — another credential won't fix them.
 | `boost capabilities` | which features are open for this key; creator regions; rate limits |
 | `boost shops` | bound shops → shop_id for --shop; per-shop capabilities |
 | `boost creator resolve <@handle\|user_id...>` | TikTok creator → creator_oecuid (≤100); --region |
-| `boost creator get <creator_oecuid...>` | profile, contact email/phone, followers, GMV band; --region |
+| `boost creator get <creator_oecuid...>` | profile, contact email/phone, creator level, followers, GMV band; --region |
 | `boost creator changes` | creators of a region whose profile or metrics changed; --since |
 | `boost resolve-job create\|get\|results` | async resolve of up to 10,000 handles / user ids |
 | `boost outreach list` | outreach tasks + send progress; --since |
@@ -93,6 +95,7 @@ names what the account still needs) — another credential won't fix them.
 | `boost sample list` | sample requests: status, product, commission, content counts; --since --status |
 | `boost sample get <id>` | SKUs, fulfillment, status timeline |
 | `boost sample contents <id>` | videos/lives posted for a sample: views, likes, orders |
+| `boost sample review <id> --decision APPROVE\|REJECT` | `[write]` approve / reject a `PENDING` sample application on TikTok |
 | `boost content list` / `get <id>` | creator videos/lives of a shop with metrics; --creator --published-from |
 | `boost order list` | affiliate orders by order time; --from --to (≤90 days) |
 | `boost attribution list` / `get <id>` | affiliate attribution per order line; --creator --order --since |
@@ -101,8 +104,9 @@ names what the account still needs) — another credential won't fix them.
 | `boost webhook create\|update\|rotate-secret\|test\|replay` | `[write]` manage push endpoints |
 | `boost config` | show/set key (shared with kalo), default shop, endpoint |
 
-`content`, `attribution` and `creator changes` follow the published API but may still answer
-`CAPABILITY_UNAVAILABLE` (`PLANNED` / `NOT_IMPLEMENTED`) — tell the user the feature isn't live yet.
+`content` and `sample_review` are open as `PILOT`. `attribution` and `creator changes` follow the
+published API but may still answer `CAPABILITY_UNAVAILABLE` (`PLANNED` / `NOT_IMPLEMENTED`) — tell the
+user the feature isn't live yet; `boost capabilities` shows what this key has.
 
 ## Writes
 
@@ -220,6 +224,37 @@ following up after an invitation or sample. (Bulk first contact is `outreach cre
   `PLATFORM_REJECTED` is TikTok refusing (quota, risk control, content) — tell the user, don't resend.
 - `--operator` works as for outreach: leave it out unless the user asks to act as another member.
 
+## Review sample applications
+
+Creators apply for free samples; the shop approves or rejects each one on TikTok. `boost sample review`
+submits that decision to TikTok in real time — it is a `[write]` and **can't be undone**.
+
+1. Find what waits: `boost sample list --shop S --all --status APPLY_TO_REVIEW`; look at the creator
+   (`boost creator get <creator_oecuid> --region <shop region>`) and the product before deciding.
+   Only applications still `PENDING` on TikTok can be reviewed — the local status may lag.
+2. Dry run, show it, and only after the user decides per application rerun with
+   `--idempotency-key <key from the dry run> --yes`:
+   - approve: `boost sample review <id> --shop S --decision APPROVE`
+   - reject: `boost sample review <id> --shop S --decision REJECT --reject-reason NOT_MATCH|OFFLINE|OUT_OF_STOCK|OTHER`
+     (TikTok's codes; no free text — ask the user which applies, don't pick one)
+   Never approve or reject in bulk on your own judgment: the user decides each one (or gives an explicit rule).
+3. Read the answer: `platform` is TikTok's state read back once right after the review;
+   `observed=false` only means it wasn't read back, not that the review failed — check `boost sample get`
+   later. An approval's `channel_main_order_id` often is still null (TikTok creates it within about a
+   minute); when present, keep it — `/samples` gets it only hours to a day later. `replayed=true` means
+   TikTok wasn't called again because the decision was already in effect.
+
+- Only shops whose market is US/ID/TH/MY/VN/PH/SG/JP and that authorized TikTok Shop Open API in Kaloboost
+  (`SAMPLE_REVIEW` in `boost shops`); others answer `CHANNEL_NOT_AVAILABLE`. Applications an agency
+  submitted for a creator (`AGENCY_APPLICATION`) can only be handled in TikTok Seller Center.
+- `SAMPLE_NOT_REVIEWABLE` = no longer pending on TikTok (someone handled it, it expired, or the creator
+  withdrew): report the state it names; don't retry.
+- **Retrying**: after a timeout / 503 rerun the identical command with the same `--idempotency-key` — it
+  then runs at most once. Never retry with a new key. If the answer is `SAMPLE_NOT_REVIEWABLE` without a
+  state, or `PLATFORM_REJECTED`, after such a timeout, the first try may have worked: check
+  `boost sample get <id>` before anything else.
+- Limit: 5 reviews per second per key.
+
 ## Conventions
 
 - Shop-level commands need `--shop <shop_id>` from `boost shops` (or a saved default)
@@ -259,7 +294,7 @@ following up after an invitation or sample. (Bulk first contact is `outreach cre
   is the truth. `delivered_time` is always null today. `--since` can miss some changes; for a
   complete picture list without `--since`. `sample get` on an old id may return a new merged id.
 - **Sample content metrics** are snapshots, often stale for older posts; don't sum across calls.
-- **Affiliate orders** are read live from TikTok (only US/ID/TH/MY/VN/PH/SG shops that authorized
+- **Affiliate orders** are read live from TikTok (only US/ID/TH/MY/VN/PH/SG/JP shops that authorized
   TikTok Shop Open API in Kaloboost; others answer `CHANNEL_NOT_AVAILABLE`). Settlement and
   refunds change after the fact — re-pull the window rather than adding up earlier runs. Use
   `--all` for complete orders: one order can span two pages.
