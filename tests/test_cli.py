@@ -2,6 +2,8 @@ import base64
 import datetime
 import json
 
+import pytest
+
 from conftest import err, page
 
 from kaloboost.cli import main
@@ -936,3 +938,36 @@ def test_creator_batch_get_shows_level(capsys, env):
     code, out = run(capsys, "creator", "get", "c1", "c2", "--region", "JP")
     assert code == 0, out
     assert "level" in out.splitlines()[0] and ",3," in out
+
+
+def test_sample_review_error_hints_scan_all_details(capsys, env):
+    # platform_status listed first still names the state
+    env.responses["/samples/sr1/review"] = err(409, "SAMPLE_NOT_REVIEWABLE", details=[
+        {"field": "platform_status", "reason": "COMPLETED"},
+        {"field": "sample_request_id", "reason": "NOT_PENDING"},
+    ])
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "now COMPLETED" in out
+    env.responses["/samples/sr1/review"] = err(409, "SAMPLE_NOT_REVIEWABLE", "sample_request_id",
+                                               "CHANNEL_RECORD_NOT_FOUND")
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "no such application" in out
+    # channel_code not first still gets the timeout check hint
+    env.responses["/samples/sr1/review"] = err(422, "PLATFORM_REJECTED", details=[
+        {"field": "sample_request_id", "reason": "REJECTED"},
+        {"field": "channel_code", "reason": "12052900"},
+    ])
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and "boost sample get" in out
+
+
+@pytest.mark.parametrize("reason,needle", [
+    ("REGION_NOT_SUPPORTED", "market is not supported"),
+    ("SCOPE_MISSING", "re-authorize"),
+    ("NO_CHANNEL_APPLY_ID", "no TikTok application id"),
+    ("NOT_APPROVABLE", "won't let this application be approved"),
+])
+def test_sample_review_channel_not_available_reasons(capsys, env, reason, needle):
+    env.responses["/samples/sr1/review"] = err(422, "CHANNEL_NOT_AVAILABLE", "sample_request_id", reason)
+    code, out = run(capsys, "sample", "review", "sr1", "--shop", "s", "--decision", "APPROVE", "--yes")
+    assert code == 1 and needle in out

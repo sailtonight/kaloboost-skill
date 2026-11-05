@@ -241,7 +241,7 @@ submits that decision to TikTok in real time — it is a `[write]` and **can't b
 3. Read the answer: `platform` is TikTok's state read back once right after the review;
    `observed=false` only means it wasn't read back, not that the review failed — check `boost sample get`
    later. An approval's `channel_main_order_id` often is still null (TikTok creates it within about a
-   minute); when present, keep it — `/samples` gets it only hours to a day later. `replayed=true` means
+   minute); when present, keep it — `boost sample get` shows it only hours to a day later. `replayed=true` means
    TikTok wasn't called again because the decision was already in effect.
 
 - Only shops whose market is US/ID/TH/MY/VN/PH/SG/JP and that authorized TikTok Shop Open API in Kaloboost
