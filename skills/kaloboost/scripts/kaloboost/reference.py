@@ -48,6 +48,7 @@ COMMAND_TABLE = [
     ("boost sample list", "sample requests: status, product, commission, content counts; --since --status"),
     ("boost sample get <id>", "SKUs, fulfillment, status timeline"),
     ("boost sample contents <id>", "videos/lives posted for a sample: views, likes, orders"),
+    ("boost sample review <id> --decision", "approve / reject a PENDING sample application on TikTok [write, --yes]"),
     ("boost content list", "creator videos/lives of a shop with metrics; --creator --published-from"),
     ("boost content get <id>", "one video/live: sample & collaboration links, metrics"),
     ("boost order list", "affiliate orders by order time; --from --to (≤90 days)"),

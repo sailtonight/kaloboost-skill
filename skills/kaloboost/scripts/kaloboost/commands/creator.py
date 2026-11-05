@@ -86,6 +86,7 @@ def _flat_profile(c: dict) -> dict:
         "handle": ident.get("handle"),
         "nickname": prof.get("nickname"),
         "category": prof.get("category"),
+        "level": prof.get("creator_level"),
         "followers": met.get("follower_count"),
         "median_views": met.get("video_med_view_cnt"),
         "gmv_range": met.get("gmv_range"),
@@ -109,6 +110,8 @@ def get(cfg, opts, args):
                 "gmv is 30-day revenue in local currency and is exact for only ~2-5% of creators — "
                 "\"0\" or null means unknown, not zero; show gmv_range instead",
                 "gmv_range is a display label — never parse or sort by it",
+                "profile.creator_level is TikTok's creator level, as-is: tiers differ by market, so don't compare "
+                "levels across markets; null = Kaloboost has no level for this creator",
             ]
         )
         return 0
@@ -130,7 +133,7 @@ def get(cfg, opts, args):
         row["creator_oecuid"] = row["creator_oecuid"] or item.get("creator_oecuid")
         row["status"] = item.get("status") or ("FOUND" if c.get("identity") else None)
         rows.append(row)
-    fields = ("creator_oecuid", "status", "handle", "nickname", "followers", "median_views", "gmv_range", "email")
+    fields = ("creator_oecuid", "status", "handle", "nickname", "level", "followers", "median_views", "gmv_range", "email")
     render.emit_table("creators", rows, fields)
     render.emit_help(["NOT_FOUND = not in this --region's creator table; other regions are not searched"])
     return 0

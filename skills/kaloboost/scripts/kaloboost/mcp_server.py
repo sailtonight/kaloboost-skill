@@ -22,7 +22,7 @@ TOOLS = {
 HIDDEN_FLAGS = {"json", "file"}
 # Commands that change state upstream. Those with --yes return a dry run until yes=true.
 WRITES = {c.path for c in COMMANDS if c.flag("--yes") or c.flag("--idempotency-key")} | {"outreach upload-image"}
-DESTRUCTIVE = {"outreach cancel", "webhook update", "webhook rotate-secret"}
+DESTRUCTIVE = {"outreach cancel", "webhook update", "webhook rotate-secret", "sample review"}
 
 
 def _confirm_param(cmd) -> str | None:
